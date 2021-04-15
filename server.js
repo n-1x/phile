@@ -8,7 +8,9 @@ const AUTO_DELETE_TIMEOUT = 1000 * 60 * 60 * 24;
 
 //filter for ignoring certain user agents
 const uaFilter = /(facebook|discord)/;
+
 const fileInfo = {};
+const pendingUploads = {};
 
 
 //generate an ID of random letters in mixed case
@@ -107,7 +109,8 @@ function deleteFile(id) {
             }
         });
 
-        fileInfo[id] = undefined;
+        delete fileInfo[id];
+        delete pendingUploads[id];
     }
 }
 
@@ -159,49 +162,103 @@ function handleGET(req, res) {
 
 
 function handlePOST(req, res) {
-    const id = generateUniqueID();
-    const writeStream = fs.createWriteStream(`./files/${id}`);
-    const fileSize = req.headers["content-length"];
-    let bytesWritten = 0;
+    if (req.url === "/new") {
+        const size = parseInt(req.headers["x-filesize"]);
 
-    req.on("data", chunk => {
-        writeStream.write(chunk, err => {
-            if (err) {
-                console.log("Error writing chunk: " + err);
+        if (!isNaN(size)) {
+            const id = generateUniqueID();
+            const writeStream = fs.createWriteStream(`./files/${id}`);
+
+            writeStream.on("finish", () => {
+                console.log(`${id} fully received`);
+
+                writeStream.res.writeHead(200, {"X-Done": "y"});
+                writeStream.res.end();
+                
+                setTimeout(deleteFile, AUTO_DELETE_TIMEOUT, id);
+                delete pendingUploads[id];
+            });
+
+            pendingUploads[id] = {id, size, writeStream, received: 0, chunks: [], nextChunk: 0};
+            fileInfo[id] = {
+                filename: req.headers["x-filename"],
+                dCount: parseDCount(req.headers["x-dcount"])
+            };
+
+            console.log(`New file requested id: ${id}, size: ${size}`);
+            res.writeHead(200, {"X-File-ID": id.toString()});
+            res.end();
+        }
+        else {
+            res.writeHead(500);
+            res.end();
+        }
+    }
+    else if (req.url === "/data") {
+        const id = req.headers["x-file-id"];
+        const pending = pendingUploads[id];
+        
+        if (pending) {
+            const blockSize = parseInt(req.headers["content-length"]);
+
+            if (isNaN(blockSize)) {
                 res.writeHead(500);
                 res.end();
+                return;
             }
-            else {
-                bytesWritten += chunk.length;
+
+            const data = Buffer.alloc(blockSize);
+            let bytesReceived = 0;
+            
+            req.on("data", chunk => {
+                chunk.copy(data, bytesReceived, 0);
+                bytesReceived += chunk.length;
+            });
+            
+            req.on("end", () => {
+                const blockID = req.headers["x-block-id"];
+                pending.received += bytesReceived;
                 
-                //handle response here so the ID is only sent
-                //when the file is fully written to disk. This
-                //means the link will be immediately usable
-                if (bytesWritten >= fileSize) {
-                    writeStream.end();
-                    const dCount = parseDCount(
-                        req.headers["x-dcount"]);
-        
-                    fileInfo[id] = {
-                        filename: req.headers["x-filename"],
-                        dCount
-                    };
+                //add all consecutive chunks to the sream
+                pending.chunks[blockID] = data;
 
-                    res.writeHead(200, {"X-File-ID": id});
-                    res.end();
-                    console.log("Received " + id);
-
-                    setTimeout(deleteFile, AUTO_DELETE_TIMEOUT, id);
+                let c = pending.chunks[pending.nextChunk];
+                while (c) {
+                    pending.writeStream.write(c, err => {
+                        if (err) {
+                            console.log("Error writing data: " + err);
+                            res.writeHead(500);
+                            res.end();
+                            
+                            pending.writeStream.close();
+                            deleteFile(id);
+                        }
+                    });
+                    ++pending.nextChunk;
+                    c = pending.chunks[pending.nextChunk];
                 }
-            }
-        });
-    });
+
+                if (pending.received >= pending.size) {
+                    //writeStream 'finish' event will handle the response
+                    pending.writeStream.res = res;
+                    pending.writeStream.end();
+                }
+                else {
+                    res.writeHead(200);
+                    res.end();
+                }
+            });
+        }
+        else {
+            console.log("Data sent to /data with no pending upload at ID " + id);
+        }
+    }
+
 }
 
 
 const server = http.createServer((req, res) => {
     const ua = req.headers["user-agent"];
-    console.log(`${req.method} ${req.url}`);
 
     //ignore requests with a user agent
     //matching the filter rules
