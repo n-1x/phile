@@ -212,6 +212,7 @@ function handlePOST(req, res) {
             });
             
             req.on("end", () => {
+                const total = pending.bytesReceived + bytesReceived;
                 const writeData = (resolve, reject) => {
                     const startByte = parseInt(req.headers["x-start"]);
 
@@ -227,8 +228,7 @@ function handlePOST(req, res) {
                                 reject();
                             }
                             else {
-                                
-                                res.writeHead(200, {"X-Received": pending.received});
+                                res.writeHead(200, {"X-Received": total});
                                 resolve();
                             }
     
@@ -248,7 +248,7 @@ function handlePOST(req, res) {
                     pending.lastPromise = new Promise(writeData);
                 }
 
-                pending.received += bytesReceived;
+                pending.received = total;
 
                 if (pending.received > pending.size) {
                     pending.lastPromise.then(() => {
