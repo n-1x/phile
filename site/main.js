@@ -1,14 +1,6 @@
-let loadingInterval = null;
 let index = 0;
 let file = null;
 let currentFileID = null;
-
-function loading() {
-    const anim = ["--", "\\", "¦", "/"];
-    h.innerText = anim[index];
-    index = (index + 1) % anim.length;
-}
-
 
 function filePicked() {
     file = fileInput.files[0];
@@ -42,8 +34,12 @@ function upload(blob, blockID) {
             
             if (finished) {
                 h.innerHTML = `<a href="/${currentFileID}">${currentFileID}</a>`;
-                clearInterval(interval);
                 currentFileID = null;
+            }
+            else {
+                const bytesReceived = parseInt(xhr.getResponseHeader("X-Received"));
+                const percent = Math.floor(bytesReceived / file.size * 100.0);
+                h.innerText = `${percent}%`;
             }
         }
     }
@@ -54,6 +50,8 @@ function upload(blob, blockID) {
 
 function sendFile() {
     if (file !== null && currentFileID === null) {
+        h.innerText = "0%"; //this is here to give instant feedback to the send button
+
         console.log("Getting ID from server");
         //first xhr gets id for new file upload
         const newFileXHR = new XMLHttpRequest();
@@ -73,8 +71,6 @@ function sendFile() {
                 let end = bytesPerChunk;
                 let blockID = 0;
 
-                interval = setInterval(loading, 200);
-
                 while(start < file.size) {
                     upload(file.slice(start, end), blockID++);
 
@@ -89,7 +85,9 @@ function sendFile() {
 
 
 function filePickHandle(e) {
-    fileInput.click();
+    if (currentFileID === null) {
+        fileInput.click();
+    }
 }
 
 

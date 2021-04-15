@@ -219,11 +219,12 @@ function handlePOST(req, res) {
                 const blockID = req.headers["x-block-id"];
                 pending.received += bytesReceived;
                 
-                //add all consecutive chunks to the sream
+                //add all consecutive chunks to the stream
                 pending.chunks[blockID] = data;
 
                 let c = pending.chunks[pending.nextChunk];
                 while (c) {
+                    const chunkID = pending.nextChunk;
                     pending.writeStream.write(c, err => {
                         if (err) {
                             console.log("Error writing data: " + err);
@@ -233,7 +234,9 @@ function handlePOST(req, res) {
                             pending.writeStream.close();
                             deleteFile(id);
                         }
+                        delete pending.chunks[chunkID];
                     });
+
                     ++pending.nextChunk;
                     c = pending.chunks[pending.nextChunk];
                 }
@@ -244,7 +247,7 @@ function handlePOST(req, res) {
                     pending.writeStream.end();
                 }
                 else {
-                    res.writeHead(200);
+                    res.writeHead(200, {"X-Received": pending.received});
                     res.end();
                 }
             });
