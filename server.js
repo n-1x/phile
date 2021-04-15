@@ -81,6 +81,14 @@ function sendFileID(res, id) {
 
         const readStream = fs.createReadStream(filePath);
         readStream.pipe(res);
+
+        readStream.on("finish", () => {
+            console.log(`Sent ${id}[${fileInfo[id].dCount}]`);  
+
+            if (fileInfo[id].dCount === 0) {
+                deleteFile(id);
+            }
+        });
     }
     else {
         send404(res);
@@ -138,15 +146,9 @@ function handleGET(req, res) {
         const id = req.url.substr(1);
         
         if (fileInfo[id])
-        {
+        {      
             sendFileID(res, id);
             --fileInfo[id].dCount;
-            console.log(`Sent ${id}[${fileInfo[id].dCount}]`);
-
-            if (fileInfo[id].dCount === 0)
-            {
-                deleteFile(id);
-            }            
         }
         else
         {
@@ -158,7 +160,7 @@ function handleGET(req, res) {
 
 function handlePOST(req, res) {
     const id = generateUniqueID();
-    const writeStream = fs.createWriteStream("./files/" + id);
+    const writeStream = fs.createWriteStream(`./files/${id}`);
     const fileSize = req.headers["content-length"];
     let bytesWritten = 0;
 
@@ -199,6 +201,7 @@ function handlePOST(req, res) {
 
 const server = http.createServer((req, res) => {
     const ua = req.headers["user-agent"];
+    console.log(`${req.method} ${req.url}`);
 
     //ignore requests with a user agent
     //matching the filter rules
@@ -215,6 +218,7 @@ const server = http.createServer((req, res) => {
     }
     else
     {
+        console.log("Filtered UA");
         //send response to filtered agents
         //so they know not to retry
         res.writeHead(403, "Filtered UA");
@@ -226,6 +230,12 @@ const server = http.createServer((req, res) => {
 const options = {
     port: 1880,
     host: "0.0.0.0"
+}
+
+const filesDir = "./files";
+
+if (!fs.existsSync(filesDir)) {
+    fs.mkdirSync(filesDir);
 }
 
 server.listen(options, () => {
