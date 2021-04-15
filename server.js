@@ -102,7 +102,7 @@ function sendFileID(res, id) {
 
 
 function deleteFile(id) {
-    if (fileInfo[id] !== undefined) {
+    if (fileInfo[id]) {
         fs.unlink("./files/" + id, err => {
             if (err) {
                 console.log("Error deleting " + id);
@@ -257,6 +257,9 @@ function handlePOST(req, res) {
                     pending.lastPromise.then(() => {
                         fs.close(pending.fd);
                         delete pendingUploads[id];
+                        setTimeout(() => {
+                            deleteFile(id);
+                        }, AUTO_DELETE_TIMEOUT);
                     });
                 }
             });
