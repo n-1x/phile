@@ -141,8 +141,8 @@ function handleGET(req, res) {
     else {
         let path = req.url;
 
+        //prevent simple directory traversal
         if (path.includes("..")) {
-            //prevent simple directory traversal
             const regex = /\/\.\./g;
             path = path.replace(regex, "");
         }
@@ -167,27 +167,23 @@ function handlePOST(req, res) {
 
         if (!isNaN(size)) {
             const id = generateUniqueID();
-            const writeStream = fs.createWriteStream(`./files/${id}`);
-
-            writeStream.on("finish", () => {
-                console.log(`${id} fully received`);
-
-                writeStream.res.writeHead(200, {"X-Done": "y"});
-                writeStream.res.end();
-                
-                setTimeout(deleteFile, AUTO_DELETE_TIMEOUT, id);
-                delete pendingUploads[id];
+            
+            fs.open(`./files/${id}`, "w", (err, fd) => {
+                if (err) {
+                    res.writeHead(500);
+                }
+                else {
+                    pendingUploads[id] = {fd, id, size, received: 0, lastPromise: null};
+                    fileInfo[id] = {
+                        filename: req.headers["x-filename"],
+                        dCount: parseDCount(req.headers["x-dcount"])
+                    };
+        
+                    console.log(`NEW ${req.connection.remoteAddress} (ID: ${id}, size: ${size}, dcount: ${fileInfo[id].dCount})`);
+                    res.writeHead(200, {"X-File-ID": id});
+                }
+                res.end();
             });
-
-            pendingUploads[id] = {id, size, writeStream, received: 0, chunks: [], nextChunk: 0};
-            fileInfo[id] = {
-                filename: req.headers["x-filename"],
-                dCount: parseDCount(req.headers["x-dcount"])
-            };
-
-            console.log(`New file requested id: ${id}, size: ${size}, dcount: ${fileInfo[id].dCount}`);
-            res.writeHead(200, {"X-File-ID": id.toString()});
-            res.end();
         }
         else {
             res.writeHead(500);
@@ -216,39 +212,49 @@ function handlePOST(req, res) {
             });
             
             req.on("end", () => {
-                const blockID = req.headers["x-block-id"];
-                pending.received += bytesReceived;
-                
-                //add all consecutive chunks to the stream
-                pending.chunks[blockID] = data;
+                const writeData = (resolve, reject) => {
+                    const startByte = parseInt(req.headers["x-start"]);
 
-                let c = pending.chunks[pending.nextChunk];
-                while (c) {
-                    const chunkID = pending.nextChunk;
-                    pending.writeStream.write(c, err => {
-                        if (err) {
-                            console.log("Error writing data: " + err);
-                            res.writeHead(500);
+                    if (isNaN(startByte)) {
+                        res.writeHead(500);
+                        res.end();
+                        reject();
+                    }
+                    else {
+                        fs.write(pending.fd, data, 0, data.length, startByte, err => {
+                            if (err) {
+                                res.writeHead(500);
+                                reject();
+                            }
+                            else {
+                                
+                                res.writeHead(200, {"X-Received": pending.received});
+                                resolve();
+                            }
+    
                             res.end();
-                            
-                            pending.writeStream.close();
-                            deleteFile(id);
-                        }
-                        delete pending.chunks[chunkID];
+                        });
+                    }
+                };
+
+                if(pending.lastPromise) {
+                    pending.lastPromise = new Promise((resolve, reject) => {
+                        pending.lastPromise.then(() => {
+                            writeData(resolve, reject);
+                        });
                     });
-
-                    ++pending.nextChunk;
-                    c = pending.chunks[pending.nextChunk];
-                }
-
-                if (pending.received >= pending.size) {
-                    //writeStream 'finish' event will handle the response
-                    pending.writeStream.res = res;
-                    pending.writeStream.end();
                 }
                 else {
-                    res.writeHead(200, {"X-Received": pending.received});
-                    res.end();
+                    pending.lastPromise = new Promise(writeData);
+                }
+
+                pending.received += bytesReceived;
+
+                if (pending.received > pending.size) {
+                    pending.lastPromise.then(() => {
+                        fs.close(pending.fd);
+                        delete pendingUploads[id];
+                    });
                 }
             });
         }

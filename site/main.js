@@ -22,22 +22,24 @@ function parseDCount() {
 }
 
 
-function upload(blob, blockID) {
+function upload(blob, startByte) {
     const xhr = new XMLHttpRequest();
 
     xhr.open('POST', '/data', true);
     xhr.setRequestHeader("X-File-ID", currentFileID);
-    xhr.setRequestHeader("X-Block-ID", blockID);
+    xhr.setRequestHeader("X-Start", startByte);
     xhr.onreadystatechange = () => {
         if (xhr.readyState === XMLHttpRequest.DONE) {
-            const finished = xhr.getResponseHeader("X-Done");
-            
-            if (finished) {
+            const bytesReceived = parseInt(xhr.getResponseHeader("X-Received"));
+
+            if (isNaN(bytesReceived)) {
+                h.innerText = "E";
+            }
+            else if (bytesReceived === file.size) {
                 h.innerHTML = `<a href="/${currentFileID}">${currentFileID}</a>`;
                 currentFileID = null;
             }
             else {
-                const bytesReceived = parseInt(xhr.getResponseHeader("X-Received"));
                 const percent = Math.floor(bytesReceived / file.size * 100.0);
                 h.innerText = `${percent}%`;
             }
@@ -69,10 +71,9 @@ function sendFile() {
 
                 let start = 0;
                 let end = bytesPerChunk;
-                let blockID = 0;
 
                 while(start < file.size) {
-                    upload(file.slice(start, end), blockID++);
+                    upload(file.slice(start, end), start);
 
                     start = end;
                     end = start + bytesPerChunk; //doesn't matter if end is larger than file
