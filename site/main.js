@@ -22,63 +22,59 @@ function parseDCount() {
 }
 
 
-function upload(blob, startByte) {
-    const xhr = new XMLHttpRequest();
-
-    xhr.open('POST', '/data', true);
-    xhr.setRequestHeader("X-File-ID", currentFileID);
-    xhr.setRequestHeader("X-Start", startByte);
-    xhr.onreadystatechange = () => {
-        if (xhr.readyState === XMLHttpRequest.DONE) {
-            const bytesReceived = parseInt(xhr.getResponseHeader("X-Received"));
-
-            if (isNaN(bytesReceived)) {
-                h.innerText = "E";
-            }
-            else if (bytesReceived === file.size) {
-                h.innerHTML = `<a href="/${currentFileID}">${currentFileID}</a>`;
-                currentFileID = null;
-            }
-            else {
-                const percent = Math.floor(bytesReceived / file.size * 100.0);
-                h.innerText = `${percent}%`;
-            }
-        }
-    }
+async function upload(blob, startByte) {
+    const response = await fetch("/data", {
+        method: "POST",
+        headers: {
+            "X-File-ID": currentFileID,
+            "X-Start": startByte
+        },
+        body: blob
+    });
     
-    xhr.send(blob);
+    const bytesReceived = parseInt(response.headers.get("X-Received"));
+
+    if (isNaN(bytesReceived)) {
+        h.innerText = "E";
+    }
+    else if (bytesReceived === file.size) {
+        h.innerHTML = `<a href="/${currentFileID}">${currentFileID}</a>`;
+        currentFileID = null;
+    }
+    else {
+        const percent = Math.floor(bytesReceived / file.size * 100.0);
+        h.innerText = `${percent}%`;
+    }
 }
 
 
-function sendFile() {
+async function sendFile() {
     if (file !== null && currentFileID === null) {
-        h.innerText = "0%"; //this is here to give instant feedback to the send button
+        h.innerText = "..."; //gives instant feedback to the send button
 
-        //first xhr gets id for new file upload
-        const newFileXHR = new XMLHttpRequest();
-        newFileXHR.open("POST", "/new", true);
-        newFileXHR.setRequestHeader("X-DCount", num.value);
-        newFileXHR.setRequestHeader("X-Filename", file.name);
-        newFileXHR.setRequestHeader("X-FileSize", file.size);
-        newFileXHR.onreadystatechange = () => {
-            if (newFileXHR.readyState === XMLHttpRequest.DONE) {
-                currentFileID = newFileXHR.getResponseHeader("X-File-ID");
-
-                //split file into chunks and send them
-                const bytesPerChunk = 1024 * 1024 * 1;
-
-                let start = 0;
-                let end = bytesPerChunk;
-
-                while(start < file.size) {
-                    upload(file.slice(start, end), start);
-
-                    start = end;
-                    end = start + bytesPerChunk; //doesn't matter if end is larger than file
-                }
+        const response = await fetch("/new", {
+            method: "POST",
+            headers: {
+                "X-DCount": num.value,
+                "X-Filename": file.name,
+                "X-FileSize": file.size
             }
-        };
-        newFileXHR.send();
+        });
+
+        currentFileID = response.headers.get("X-File-ID");
+
+        //split file into chunks and send them
+        const bytesPerChunk = 1024 * 1024 * 1;
+
+        let start = 0;
+        let end = bytesPerChunk;
+
+        while(start < file.size) {
+            upload(file.slice(start, end), start);
+
+            start = end;
+            end = start + bytesPerChunk; //doesn't matter if end is larger than file
+        }
     }
 }
 
