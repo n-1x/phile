@@ -46,12 +46,15 @@ function sendFile()
         xhr.setRequestHeader("X-DCount", num.value);
         xhr.setRequestHeader("X-Filename", file.name);
         xhr.onreadystatechange = () => {
-            if (xhr.readyState === 4)
+            if (xhr.readyState === XMLHttpRequest.DONE)
             {
                 const id = xhr.getResponseHeader("X-File-ID");
                 h.innerHTML = `<a href="/${id.toString()}">${id.toString()}</a>`;
                 clearInterval(interval);
                 busy = false;
+            }
+            else {
+                console.log("readyStateChanged: " + xhr.readyState);
             }
         }
     
