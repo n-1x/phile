@@ -54,7 +54,6 @@ function sendFile() {
     if (file !== null && currentFileID === null) {
         h.innerText = "0%"; //this is here to give instant feedback to the send button
 
-        console.log("Getting ID from server");
         //first xhr gets id for new file upload
         const newFileXHR = new XMLHttpRequest();
         newFileXHR.open("POST", "/new", true);
@@ -64,7 +63,6 @@ function sendFile() {
         newFileXHR.onreadystatechange = () => {
             if (newFileXHR.readyState === XMLHttpRequest.DONE) {
                 currentFileID = newFileXHR.getResponseHeader("X-File-ID");
-                console.log(`Received ID for new file: ${currentFileID}`);
 
                 //split file into chunks and send them
                 const bytesPerChunk = 1024 * 1024 * 1;

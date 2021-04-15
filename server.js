@@ -212,7 +212,12 @@ function handlePOST(req, res) {
             });
             
             req.on("end", () => {
-                const total = pending.bytesReceived + bytesReceived;
+                //make a copy of the number of bytes that will have been written
+                //once this write is complete. Using pending.received in the callback
+                //would not be correct after all data is received but not yet written.
+                const total = pending.received + bytesReceived;
+                pending.received = total;
+
                 const writeData = (resolve, reject) => {
                     const startByte = parseInt(req.headers["x-start"]);
 
@@ -247,8 +252,6 @@ function handlePOST(req, res) {
                 else {
                     pending.lastPromise = new Promise(writeData);
                 }
-
-                pending.received = total;
 
                 if (pending.received > pending.size) {
                     pending.lastPromise.then(() => {
