@@ -75,19 +75,22 @@ function sendFileID(res, id) {
     if (fileInfo[id] !== undefined) {
         const filename = fileInfo[id].filename;
         const filePath = "./files/" + id;
-
+        
         res.writeHead(200, {
             "Content-Length": fs.statSync(filePath).size,
             "Content-Disposition": `attachment; filename="${filename}"`
         });
-
+        
         const readStream = fs.createReadStream(filePath);
         readStream.pipe(res);
+        
+        readStream.on("end", () => {
+            const info = fileInfo[id];
 
-        readStream.on("finish", () => {
-            console.log(`Sent ${id}[${fileInfo[id].dCount}]`);  
+            --info.dCount;
+            console.log(`Sent ${id}[${info.dCount}]`);  
 
-            if (fileInfo[id].dCount === 0) {
+            if (info.dCount === 0) {
                 deleteFile(id);
             }
         });
@@ -119,16 +122,12 @@ function deleteFile(id) {
 //defaults to 1, only accepts numbers
 //greater than 0
 function parseDCount(numString) {
-    let n = 1;
+    const parsed = parseInt(numString);
     
-    if (numString !== "")
+    let n = 1;
+    if (!isNaN(parsed) && parsed > 0)
     {
-        let parsed = parseInt(numString);
-
-        if (!isNaN(parsed) && parsed > 0)
-        {
-            n = parsed;
-        }
+        n = parsed;
     }
 
     return n;
@@ -139,23 +138,24 @@ function handleGET(req, res) {
     if (req.url === "/") {
         sendFile(res, "site/index.html");
     }
-    else if (req.url.includes(".")) {
-        //prevent simple directory traversal
-        const regex = /\/\.\./g;
-        const path = req.url.replace(regex, "");
-        sendFile(res, "site/" + path.substr(1));
-    }
     else {
-        const id = req.url.substr(1);
+        const path = req.url;
+
+        if (path.includes("..")) {
+            //prevent simple directory traversal
+            const regex = /\/\.\./g;
+            path = path.replace(regex, "");
+        }
+
+        path = path.substr(1);
         
-        if (fileInfo[id])
+        if (fileInfo[path])
         {      
-            sendFileID(res, id);
-            --fileInfo[id].dCount;
+            sendFileID(res, path);
         }
         else
         {
-            send404(res);
+            sendFile(res, `site/${path}`);
         }
     }
 }
@@ -185,7 +185,7 @@ function handlePOST(req, res) {
                 dCount: parseDCount(req.headers["x-dcount"])
             };
 
-            console.log(`New file requested id: ${id}, size: ${size}`);
+            console.log(`New file requested id: ${id}, size: ${size}, dcount: ${fileInfo[id].dCount}`);
             res.writeHead(200, {"X-File-ID": id.toString()});
             res.end();
         }
