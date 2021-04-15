@@ -17,7 +17,7 @@ body {
     transition: background-color .2s;
     color: white;
     margin: 0;
-    padding: 0;
+    padding: 3rem;
 }
 
 #dropZone {
@@ -40,7 +40,7 @@ a {
     border-width: 5px 5px 0 5px;
     width: 15rem;
     height: 4rem;
-    margin: 3rem auto 0 auto;
+    margin: 0 auto;
     background-color: var(--background);
     transition: background-color .2s;
     box-sizing: border-box;
