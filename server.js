@@ -139,7 +139,7 @@ function handleGET(req, res) {
         sendFile(res, "site/index.html");
     }
     else {
-        let path = req.url;
+        let path = req.url.split("?")[0];
 
         //prevent simple directory traversal
         if (path.includes("..")) {
