@@ -57,7 +57,7 @@ function sendFile(res, path) {
 function send404(res) {
     res.writeHead(404, "File not found.");
 
-    fs.readFile("site/404.html", (err, data) => {
+    fs.readFile(__dirname + "/site/404.html", (err, data) => {
         if (err) {
             console.error("Couldn't load 404 file");
         }
@@ -74,7 +74,7 @@ function send404(res) {
 function sendFileID(res, id) {
     if (fileInfo[id] !== undefined) {
         const filename = fileInfo[id].filename;
-        const filePath = "./files/" + id;
+        const filePath = `${__dirname}/files/${id}`;
         
         res.writeHead(200, {
             "Content-Length": fs.statSync(filePath).size,
@@ -103,7 +103,7 @@ function sendFileID(res, id) {
 
 function deleteFile(id) {
     if (fileInfo[id]) {
-        fs.unlink("./files/" + id, err => {
+        fs.unlink(`${__dirname}/files/${id}`, err => {
             if (err) {
                 console.log("Error deleting " + id);
             }
@@ -136,7 +136,7 @@ function parseDCount(numString) {
 
 function handleGET(req, res) {
     if (req.url === "/") {
-        sendFile(res, "site/index.html");
+        sendFile(res, __dirname + "/site/index.html");
     }
     else {
         let path = req.url.split("?")[0];
@@ -168,7 +168,7 @@ function handlePOST(req, res) {
         if (!isNaN(size)) {
             const id = generateUniqueID();
             
-            fs.open(`./files/${id}`, "w", (err, fd) => {
+            fs.open(`${__dirname}/files/${id}`, "w", (err, fd) => {
                 if (err) {
                     res.writeHead(500);
                 }
