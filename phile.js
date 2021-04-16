@@ -43,7 +43,7 @@ function generateUniqueID() {
 
 //send a file normally to the user
 function sendFile(res, path) {
-    fs.readFile(path, (err, data) => {
+    fs.readFile(`${__dirname}/${path}`, (err, data) => {
         if (err) {
             send404(res);
         }
@@ -59,7 +59,7 @@ function send404(res) {
 
     fs.readFile(__dirname + "/site/404.html", (err, data) => {
         if (err) {
-            console.error("Couldn't load 404 file");
+            console.error("Couldn't load 404 file: " + err);
         }
         else {
             res.end(data);
@@ -136,7 +136,7 @@ function parseDCount(numString) {
 
 function handleGET(req, res) {
     if (req.url === "/") {
-        sendFile(res, __dirname + "/site/index.html");
+        sendFile(res, "site/index.html");
     }
     else {
         let path = req.url.split("?")[0];
