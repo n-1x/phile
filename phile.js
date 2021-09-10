@@ -304,7 +304,7 @@ const options = {
     host: "0.0.0.0"
 }
 
-const filesDir = "./files";
+const filesDir = __dirname + "/files";
 
 if (!fs.existsSync(filesDir)) {
     fs.mkdirSync(filesDir);
