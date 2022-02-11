@@ -1,24 +1,17 @@
+<!DOCTYPE html>
 <html>
     <head>
         <meta charset="UTF-8" />
         <link rel="stylesheet" type="text/css" href="main.css">
         <script type="text/javascript" src="main.js"></script>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>></title>
     </head>
 
     <body>
-        <input id="fileInput" onchange="filePicked()" class="hide" type="file">
-
-        <div id="dropZone" ondrop="dropHandle(event);" ondragover="dragHandle(event);" ondragleave="dragLeaveHandle()">
-            <div id="filePicker" onclick="filePickHandle(event)">
-                <p id="fileLabel">-</p>
-            </div>
-
-            <input id="num" type="text" value="1" onchange="parseDCount()">
-
-            <div class="sendbutton" onclick="sendFile()">></div>
-
-            <h1 id="h"></h1>
+        <input id="fileInput" style="display: none" type="file" multiple>
+        <div id="container">
+            <div id="fileList"></div>
         </div>
     </body>
 </html>

@@ -1,33 +1,27 @@
 const http = require("http");
+const fsp = require("fs/promises");
 const fs = require("fs");
 
-//num of chars to use in each ID
-const ID_LENGTH = 8;
-//time before file automatically deleted
-const AUTO_DELETE_TIMEOUT = 1000 * 60 * 60 * 24;
+const c_alphabet = "abcdefghijklmnopqrstuvwxyz";
+const c_charset = `${c_alphabet}${c_alphabet.toUpperCase()}0123456789_`;
+const c_idLength = 4;
+const c_chunkSize = 1024 ** 2 * 128; //128Mb
 
-//filter for ignoring certain user agents
-const uaFilter = /(facebook|discord)/;
-
-const fileInfo = {};
+const uploadInfo = {};
 const pendingUploads = {};
 
+let g_writePromise = Promise.resolve();
 
 //generate an ID of random letters in mixed case
 function generateID() {
     let id = "";
 
-    for (let i = 0; i < ID_LENGTH; ++i) {
-        let charCode = 0x41 + Math.floor(Math.random() * 26);
-        if (Math.random() < 0.5) {
-            charCode += 32;
-        }
-        id += String.fromCharCode(charCode);
+    for (let i = 0; i < c_idLength; ++i) {
+        id += c_charset[Math.floor(Math.random() * c_charset.length)];
     }
 
     return id;
 }
-
 
 //keeps generating IDs until a new one is found
 function generateUniqueID() {
@@ -35,29 +29,22 @@ function generateUniqueID() {
 
     do {
         id = generateID();
-    } while (fileInfo[id] !== undefined);
+    } while (uploadInfo[id] !== undefined);
 
     return id;
 }
 
-
 //send a file normally to the user
-function sendFile(res, path) {
-    fs.readFile(`${__dirname}/${path}`, (err, data) => {
-        if (err) {
-            send404(res);
-        }
-        else {
-            res.end(data);
-        }
-    });
+async function sendFile(res, path) {
+    const data = await fsp.readFile(`${__dirname}/${path}`);
+    res.writeHead(200);
+    res.end(data);
 }
-
 
 function send404(res) {
     res.writeHead(404, "File not found.");
 
-    fs.readFile(__dirname + "/site/404.html", (err, data) => {
+    fsp.readFile(__dirname + "/site/404.html", (err, data) => {
         if (err) {
             console.error("Couldn't load 404 file: " + err);
         }
@@ -67,17 +54,16 @@ function send404(res) {
     });
 }
 
-
 //sends the file with the given ID to the user
 //with a header to have the browser offer to save
 //it instead of trying to render it
 function sendFileID(res, id) {
-    if (fileInfo[id] !== undefined) {
-        const filename = fileInfo[id].filename;
+    if (uploadInfo[id] !== undefined) {
+        const filename = uploadInfo[id].filename;
         const filePath = `${__dirname}/files/${id}`;
         
         res.writeHead(200, {
-            "Content-Length": fs.statSync(filePath).size,
+            "Content-Length": fsp.statSync(filePath).size,
             "Content-Disposition": `attachment; filename="${filename}"`
         });
         
@@ -85,7 +71,7 @@ function sendFileID(res, id) {
         readStream.pipe(res);
         
         readStream.on("end", () => {
-            const info = fileInfo[id];
+            const info = uploadInfo[id];
 
             --info.dCount;
             console.log(`Sent ${id}[${info.dCount}]`);  
@@ -100,214 +86,125 @@ function sendFileID(res, id) {
     }
 }
 
+function handleNewUploadRequest(req, res) {
+    const uid = generateUniqueID();
 
-function deleteFile(id) {
-    if (fileInfo[id]) {
-        fs.unlink(`${__dirname}/files/${id}`, err => {
-            if (err) {
-                console.log("Error deleting " + id);
-            }
-            else {
-                console.log("Deleted " + id);
-            }
-        });
-
-        delete fileInfo[id];
-        delete pendingUploads[id];
-    }
-}
-
-
-//parse the number of downloads
-//defaults to 1, only accepts numbers
-//greater than 0
-function parseDCount(numString) {
-    const parsed = parseInt(numString);
+    console.log(`NEW ${uid}`);
+    pendingUploads[uid] = {
+        files: {},
+        owner: req.headers["guid"],
+    };
     
-    let n = 1;
-    if (!isNaN(parsed) && parsed > 0)
-    {
-        n = parsed;
-    }
-
-    return n;
+    res.writeHead(200);
+    res.end(`${uid}/${c_chunkSize}`);    
 }
 
+function receiveFileChunk(req) {
+    return new Promise((resolve, reject) => {
+        const contentLength = Math.min(req.headers["content-length"], c_chunkSize) || c_chunkSize;
+        const data = Buffer.alloc(contentLength);
+        let bytesReceived = 0;
+    
+        req.on("error", e => {
+            reject(e);
+        });
+        
+        req.on("data", chunk => {
+            bytesReceived += chunk.copy(data, bytesReceived);
+        });
+        
+        req.on("end", () => {
+            resolve(data);
+        });
+    });
+}
 
-function handleGET(req, res) {
-    if (req.url === "/") {
+async function handleDataRequest(req, res) {
+    const uploadId = req.headers["upload-id"];
+    const fileName = req.headers["file-name"];
+    const offset = req.headers["offset"];
+    const uploadObj = pendingUploads[uploadId];
+
+    console.log(`DATA ${uploadId}/${fileName}`);
+    
+    if (!uploadObj || req.headers["guid"] !== uploadObj.owner) {
+        res.writeHead(400);
+        res.end();
+        return;
+    }
+    
+    let fileObj = uploadObj.files[fileName];
+    
+    if (!fileObj) {
+        fileObj = {
+            received: 0,
+            size: req.headers["file-size"],
+            fd: null
+        };
+        uploadObj.files[fileName] = fileObj;
+        const dirPath = `${__dirname}/uploads/${uploadId}`;
+
+        fileObj.fdPromise = fsp.mkdir(dirPath, {recursive: true}).then(() => {
+            return fsp.open(`${dirPath}/${fileName}`, "wx");
+        });
+    }
+    
+    fileObj.fd = await fileObj.fdPromise;
+
+    receiveFileChunk(req).then(chunkData => {
+        g_writePromise = g_writePromise.then(async () => {
+            await fileObj.fd.write(chunkData, 0, chunkData.length, offset);
+            fileObj.received += chunkData.length;
+            res.writeHead(200, {"received": fileObj.received});
+            res.end();
+
+            if (fileObj.received >= fileObj.size) {
+                fileObj.fd.close();
+                fileObj.fd = null;
+            }
+        }).catch(e => {
+            console.log("Error in promise chain\n", e);
+        });
+    });
+}
+
+function handleFileRequest(req, res) {
+    const allowedFiles = ["index.html", "main.css", "main.js"];
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const path = url.pathname.substring(1, url.pathname.length);
+
+    if (path === "") {
         sendFile(res, "site/index.html");
     }
+    else if (allowedFiles.includes(path)) {
+        sendFile(res, `site/${path}`);
+    }
+    else if (Object.keys(pendingUploads).includes(path)) {
+        console.log("TODO, sending actual download page");
+    }
     else {
-        let path = req.url.split("?")[0];
-
-        //prevent simple directory traversal
-        if (path.includes("..")) {
-            const regex = /\/\.\./g;
-            path = path.replace(regex, "");
-        }
-
-        path = path.substr(1);
-        
-        if (fileInfo[path])
-        {      
-            sendFileID(res, path);
-        }
-        else
-        {
-            sendFile(res, `site/${path}`);
-        }
+        send404(res);
     }
 }
-
-
-function handlePOST(req, res) {
-    if (req.url === "/new") {
-        const size = parseInt(req.headers["x-filesize"]);
-
-        if (!isNaN(size)) {
-            const id = generateUniqueID();
-            
-            fs.open(`${__dirname}/files/${id}`, "w", (err, fd) => {
-                if (err) {
-                    res.writeHead(500);
-                }
-                else {
-                    pendingUploads[id] = {fd, id, size, received: 0, lastPromise: null};
-                    fileInfo[id] = {
-                        filename: req.headers["x-filename"],
-                        dCount: parseDCount(req.headers["x-dcount"])
-                    };
-        
-                    console.log(`NEW ${req.connection.remoteAddress} (ID: ${id}, size: ${size}, dcount: ${fileInfo[id].dCount})`);
-                    res.writeHead(200, {"X-File-ID": id});
-                }
-                res.end();
-            });
-        }
-        else {
-            res.writeHead(500);
-            res.end();
-        }
-    }
-    else if (req.url === "/data") {
-        const id = req.headers["x-file-id"];
-        const pending = pendingUploads[id];
-        
-        if (pending) {
-            const blockSize = parseInt(req.headers["content-length"]);
-
-            if (isNaN(blockSize)) {
-                res.writeHead(500);
-                res.end();
-                return;
-            }
-
-            const data = Buffer.alloc(blockSize);
-            let bytesReceived = 0;
-            
-            req.on("data", chunk => {
-                chunk.copy(data, bytesReceived, 0);
-                bytesReceived += chunk.length;
-            });
-            
-            req.on("end", () => {
-                //make a copy of the number of bytes that will have been written
-                //once this write is complete. Using pending.received in the callback
-                //would not be correct after all data is received but not yet written.
-                const total = pending.received + bytesReceived;
-                pending.received = total;
-
-                const writeData = (resolve, reject) => {
-                    const startByte = parseInt(req.headers["x-start"]);
-
-                    if (isNaN(startByte)) {
-                        res.writeHead(500);
-                        res.end();
-                        reject();
-                    }
-                    else {
-                        fs.write(pending.fd, data, 0, data.length, startByte, err => {
-                            if (err) {
-                                res.writeHead(500);
-                                reject();
-                            }
-                            else {
-                                res.writeHead(200, {"X-Received": total});
-                                resolve();
-                            }
-    
-                            res.end();
-                        });
-                    }
-                };
-
-                if(pending.lastPromise) {
-                    pending.lastPromise = new Promise((resolve, reject) => {
-                        pending.lastPromise.then(() => {
-                            writeData(resolve, reject);
-                        });
-                    });
-                }
-                else {
-                    pending.lastPromise = new Promise(writeData);
-                }
-
-                if (pending.received > pending.size) {
-                    pending.lastPromise.then(() => {
-                        fs.close(pending.fd);
-                        delete pendingUploads[id];
-                        setTimeout(() => {
-                            deleteFile(id);
-                        }, AUTO_DELETE_TIMEOUT);
-                    });
-                }
-            });
-        }
-        else {
-            console.log("Data sent to /data with no pending upload at ID " + id);
-        }
-    }
-
-}
-
 
 const server = http.createServer((req, res) => {
-    const ua = req.headers["user-agent"];
-
-    //ignore requests with a user agent
-    //matching the filter rules
-    if (!uaFilter.test(ua))
+    if (req.method === "GET")
     {
-        if (req.method === "GET")
-        {
-            handleGET(req, res);
-        }
-        else if (req.method === "POST")
-        {
-            handlePOST(req, res);
-        }
+        handleFileRequest(req, res);
     }
-    else
+    else if (req.method === "POST")
     {
-        console.log("Filtered UA");
-        //send response to filtered agents
-        //so they know not to retry
-        res.writeHead(403, "Filtered UA");
-        res.end();
+        handleNewUploadRequest(req, res);
+    }
+    else if (req.method === "PATCH")
+    {
+        handleDataRequest(req, res);
     }
 });
-
 
 const options = {
     port: 1880,
     host: "0.0.0.0"
-}
-
-const filesDir = __dirname + "/files";
-
-if (!fs.existsSync(filesDir)) {
-    fs.mkdirSync(filesDir);
 }
 
 server.listen(options, () => {
