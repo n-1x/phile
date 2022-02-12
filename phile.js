@@ -125,7 +125,7 @@ async function handleDataRequest(req, res) {
     const offset = req.headers["offset"];
     const uploadObj = pendingUploads[uploadId];
 
-    console.log(`DATA ${uploadId}/${fileName}`);
+    console.log(`DATA ${uploadId}/${fileName} [S: ${offset}]`);
     
     if (!uploadObj || req.headers["guid"] !== uploadObj.owner) {
         res.writeHead(400);

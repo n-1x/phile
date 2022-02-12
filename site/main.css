@@ -5,11 +5,17 @@ html {
 }
 
 body {
-    background-color: black;
     transition: background-color .15s;
     margin: 0;
-    color: green;
+    color: var(--accent);
     text-align: left;
+}
+
+:root {
+    --accentR: 0;
+    --accentG: 255;
+    --accentB: 0;
+    --accent: rgb(var(--accentR), var(--accentG), var(--accentB))
 }
 
 #container {
@@ -19,6 +25,7 @@ body {
     flex-direction: column;
     align-items: center;
     justify-content: center;
+    background-color: black;
 }
 
 #fileList {
@@ -35,7 +42,7 @@ body {
     display: block;
     width: 100%;
     color: transparent;
-    background: green;
+    background: var(--accent);
     background-clip: text;
     -webkit-background-clip: text;
     margin: 0;
@@ -71,5 +78,5 @@ body {
     justify-content: center;
     text-decoration: none;
     font-size: 5rem;
-    color: green;
+    color: var(--accent);
 }
