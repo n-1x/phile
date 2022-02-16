@@ -1,5 +1,6 @@
 const c_fileNameMaxDisplayLength = 16;
 const c_longPressTime = 500;
+const c_maxStreams = 16;
 const g_keyStates = {};
 const g_fileMap = {};
 let g_files = null;
@@ -12,6 +13,9 @@ let g_cumulativeSize = 0;
 let g_touchStartLoc = null;
 let g_currentFileStartByte = 0;
 let g_currentFileIndex = 0;
+let g_activeStreams = [];
+
+const g_accentColour = [];
 
 function generateGuid() {
     let guid = 0n;
@@ -67,21 +71,30 @@ function updateFileNamesList() {
     fileList.children[0].scrollIntoView();
 }
 
-async function uploadChunk(blob, startByte, fileName, fileSize, fileIndex) {
+async function uploadChunk(blob, startByte, fileIndex) {
+    const file = g_files[fileIndex];
+    g_bytesSent += blob.size;
+
     const response = await fetch("/", {
         method: "PATCH",
         headers: {
             "upload-id": g_uploadID,
-            "file-name": fileName,
-            "file-size": fileSize,
+            "file-name": file.name,
+            "file-size": file.size,
             "offset": startByte,
             "guid": g_guid,
         },
         body: blob
     });
 
-    g_files[fileIndex].bytesConfirmed = Math.max(
-        g_files[fileIndex].bytesConfirmed,
+    if (file.success === undefined) {
+        file.success = response.ok;
+    }
+    else {
+        file.success ||= response.ok;
+    }
+    file.bytesConfirmed = Math.max(
+        file.bytesConfirmed,
         parseInt(response.headers.get("received"))
     );
 }
@@ -108,13 +121,51 @@ function getNextChunk(chunkSize) {
     return [slice, start];
 }
 
+function lowestSquareAbove(x) {
+    let answer = 1;
+
+    while (answer ** 2 < x) {
+        ++answer;
+    }
+
+    return answer;
+}
+
+function createProgressMatrix() {
+    fileList.style.display = "none";
+
+    const matrix = document.createElement("div");
+    matrix.classList.add("progressMatrix");
+    container.replaceChildren(matrix);
+
+    const numFiles = g_files.length;
+    const gridSize = lowestSquareAbove(numFiles);
+    const width = 100/gridSize;
+
+    progressMatrix.style.gridTemplateColumns = `repeat(auto-fill, ${width}%)`;
+
+    for (const file of g_files) {
+        const span = document.createElement("span");
+        span.classList.add("matrix");
+        span.style.backgroundColor = `rgba(0,0,0,0)`;
+        progressMatrix.appendChild(span);
+    }
+}
+
 async function beginUpload() {
     if (g_uploadStarted || g_fileMap.length === 0) {
         return;
     }
 
+    fileList.style.display = "none";
+    createProgressMatrix();
+
     g_uploadStarted = true;
     fileInput.disabled = true;
+
+    for (const file of g_files) {
+        g_cumulativeSize += file.size;
+    }
 
     const info = (await (await fetch("/", 
     {
@@ -127,67 +178,67 @@ async function beginUpload() {
     g_uploadID = info[0];
     const chunkSize = parseInt(info[1]);
 
-    let done = false;
-    
-    // Gather up chunks into a bunch of promises up to a maximum blocksize
-    // (chunksize used here but could be anything to help client). This 
-    // allows sending multiple files at once.
-    while (!done) {
-        let uploadPromises = [];
-        let blockSize = 0;
+    const uploadNextChunk = () => {
+        const fileIndex = g_currentFileIndex;
+        const nextChunk = getNextChunk(chunkSize);
         
-        const topFile = g_files[g_currentFileIndex - 4];
-        if (topFile) {
-            topFile.listElement.scrollIntoView(true);
+        if (nextChunk === null) {
+            return null;
         }
 
-        while (blockSize < chunkSize && !done) {
-            const fileIndex = g_currentFileIndex;
-            const file = g_files[fileIndex];
-            const nextChunk = getNextChunk(chunkSize);
-            
-            if (nextChunk === null) {
-                done = true;
+        const [chunk, startByte] = nextChunk;
+        return uploadChunk(chunk, startByte, fileIndex);
+    };
+
+    const streamFunc = async (i) => {
+        console.log(`stream ${i}: begin`);
+
+        let done = false;
+        while (!done) {
+            console.log(`stream ${i}: starting`);
+            const p = uploadNextChunk();
+
+            console.log(`stream ${i}`, p);
+
+            if (p !== null) {
+                await p;
+                console.log(`stream ${i}: upload complete`);
+                updateProgressBars();
             }
             else {
-                const [chunk, startByte] = nextChunk;
-                const p = uploadChunk(chunk, startByte, file.name, file.size, fileIndex);
-
-                uploadPromises.push(p);
-                blockSize += chunk.size;
+                console.log(`stream ${i} all finished`);
+                done = true;
             }
         }
+    };
 
-        updateProgressBars();
-        await Promise.allSettled(uploadPromises);
+    for (let i = 0; i < c_maxStreams; ++i) {
+        g_activeStreams.push(streamFunc(i));
     }
 
+    await Promise.allSettled(g_activeStreams);
+
     console.log("All files complete");
-    fileList.style.display = "none";
 
     const link = document.createElement("a");
     link.classList.add("downloadLink");
     link.innerText = g_uploadID;
     link.href = `/${g_uploadID}`;
     
-    container.remove();
-    document.body.appendChild(link);
+    container.replaceChildren(link);
 }
 
 function updateProgressBars() {
-    for (const file of g_files) {
+    g_files.forEach((file, index) => {
         const {bytesConfirmed, size, listElement} = file;
-        const progress = Math.floor((bytesConfirmed / size) * 100);
+        const progress = size === 0 ? 1.0 : Math.floor(bytesConfirmed / size);
     
         totalProgress = g_bytesSent / g_cumulativeSize;
         document.title = `> ${Math.floor(totalProgress * 100)}%`;
-        
-        const text = listElement.querySelector(".fileName");
-        listElement.style.background = `linear-gradient(to right, green ${progress}%, black ${progress}%)`;
-        text.style.background = `linear-gradient(to right, black ${progress}%, green ${progress}%)`;
-        text.style.backgroundClip = "text";
-        text.style.webkitBackgroundClip = "text";
-    }
+    
+        progressMatrix.children[index].style.backgroundColor = 
+            `rgba(${g_accentColour[0]}, ${g_accentColour[1]}, ${g_accentColour[2]}, ${progress})`;
+    });
 }
 
 function handleFileChange() {
@@ -216,6 +267,11 @@ function clearTouch() {
 
 window.onload = () => {
     const el = container;
+    
+    const style = getComputedStyle(document.querySelector(":root"));
+    g_accentColour[0] = style.getPropertyValue("--accentR");
+    g_accentColour[1] = style.getPropertyValue("--accentG");
+    g_accentColour[2] = style.getPropertyValue("--accentB");
 
     document.body.onkeydown = handleKeyDown;
     document.body.onkeyup = e => {e.preventDefault(); g_keyStates[e.key] = false};
@@ -247,12 +303,12 @@ window.onload = () => {
     el.ontouchend = clearTouch;
     el.ondragover = e => {
         e.preventDefault();
-        document.body.classList.add("dragStarted");
+        container.classList.add("dragStarted");
     };
-    el.ondragleave = () => document.body.classList.remove("dragStarted");;
+    el.ondragleave = () => container.classList.remove("dragStarted");;
     el.ondrop = e => {
         e.preventDefault();
-        document.body.classList.remove("dragStarted");
+        container.classList.remove("dragStarted");
         addUniqueFileNames(e.dataTransfer.files);
     };
 

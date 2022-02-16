@@ -101,8 +101,10 @@ function handleNewUploadRequest(req, res) {
 
 function receiveFileChunk(req) {
     return new Promise((resolve, reject) => {
-        const contentLength = Math.min(req.headers["content-length"], c_chunkSize) || c_chunkSize;
-        const data = Buffer.alloc(contentLength);
+        const contentLength = Math.min(req.headers["content-length"], c_chunkSize);
+        const bufferSize = isFinite(contentLength) ? contentLength : c_chunkSize;
+
+        const data = Buffer.alloc(bufferSize);
         let bytesReceived = 0;
     
         req.on("error", e => {
@@ -125,7 +127,7 @@ async function handleDataRequest(req, res) {
     const offset = req.headers["offset"];
     const uploadObj = pendingUploads[uploadId];
 
-    console.log(`DATA ${uploadId}/${fileName} [S: ${offset}]`);
+    console.log(`DATA ${uploadId}/${fileName} [S: ${offset}, E: ${req.headers["content-length"]}]`);
     
     if (!uploadObj || req.headers["guid"] !== uploadObj.owner) {
         res.writeHead(400);
@@ -139,7 +141,8 @@ async function handleDataRequest(req, res) {
         fileObj = {
             received: 0,
             size: req.headers["file-size"],
-            fd: null
+            fd: null,
+            name: fileName
         };
         uploadObj.files[fileName] = fileObj;
         const dirPath = `${__dirname}/uploads/${uploadId}`;
@@ -154,11 +157,14 @@ async function handleDataRequest(req, res) {
     receiveFileChunk(req).then(chunkData => {
         g_writePromise = g_writePromise.then(async () => {
             await fileObj.fd.write(chunkData, 0, chunkData.length, offset);
+
             fileObj.received += chunkData.length;
+            console.log("Received: " + chunkData.length);
             res.writeHead(200, {"received": fileObj.received});
             res.end();
 
             if (fileObj.received >= fileObj.size) {
+                console.log(`FIN ${fileObj.name}`);
                 fileObj.fd.close();
                 fileObj.fd = null;
             }
