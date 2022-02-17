@@ -362,7 +362,6 @@ async function recover() {
     // included in the session file
     try {
         const uploads = await fsp.readdir(`${__dirname}/uploads`);
-        console.log(uploads);
 
         for (const entryName of uploads) {
             if (entryName !== "session.json" && !Object.keys(g_uploadInfos).includes(entryName)) {
