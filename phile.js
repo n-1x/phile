@@ -299,7 +299,7 @@ function handleFileRequest(stream, headers) {
         sendFile(stream, `site/${path1}`);
     }
     else if (Object.keys(g_uploadInfos).includes(path1)) {
-        if (path2 !== undefined) {
+        if (path2) {
             sendUploadFile(stream, path1, path2);
         }
         else {
@@ -338,13 +338,14 @@ async function recover() {
                 const {owner, completeTime} = session[uid];
 
                 if (owner && completeTime) {
+                    console.log(`RESTORE ${uid} [${remainingTime}]`);
+
                     g_uploadInfos[uid] = {owner, completeTime};
                     
                     const timeDiff = Date.now() - completeTime;
                     const remainingTime = c_expiryTime - timeDiff;
     
                     setDeleteTimeout(uid, remainingTime, "EXPIRE");
-                    console.log(`RESTORE ${uid} [${remainingTime}]`);
                 }
             }
         }
@@ -353,18 +354,23 @@ async function recover() {
         }
     }
     catch {
-        console.error("No session file found.");
+        console.log("No session file found.");
     }
 
     // Purge all upload folders that weren't 
     // included in the session file
-    const uploads = await fsp.readdir(`${__dirname}/uploads`);
+    try {
+        const uploads = await fsp.readdir(`${__dirname}/uploads`);
 
-    for (const entryName of uploads) {
-        if (entryName !== "session.json" && !Object.keys(g_uploadInfos).includes(entryName)) {
-            console.log(`PURGE ${entryName}`);
-            await fsp.rm(`${__dirname}/uploads/${entryName}`, {recursive: true});
+        for (const entryName of uploads) {
+            if (entryName !== "session.json" && !Object.keys(g_uploadInfos).includes(entryName)) {
+                console.log(`PURGE ${entryName}`);
+                await fsp.rm(`${__dirname}/uploads/${entryName}`, {recursive: true});
+            }
         }
+    }
+    catch {
+        console.log("Nothing to purge.");
     }
 }
 
