@@ -377,8 +377,8 @@ async function recover() {
 const options = {
     port: 1880,
     host: "0.0.0.0",
-    key: fs.readFileSync("localhost-privkey.pem"),
-    cert: fs.readFileSync("localhost-cert.pem"),
+    key: fs.readFileSync(process.argv[1]),
+    cert: fs.readFileSync(process.argv[2]),
 };
 
 const server = http2.createSecureServer(options);
