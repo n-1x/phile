@@ -174,7 +174,8 @@ async function beginUpload() {
     {
         method: "POST",
         headers: {
-            "guid": g_guid
+            "guid": g_guid,
+            "total-size": g_cumulativeSize
         }
     })).text()).split("/");
 
