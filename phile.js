@@ -311,7 +311,7 @@ function handleFileRequest(stream, headers) {
     }
 }
 
-function saveSession() {
+async function saveSession() {
     const sessionObj = {};
 
     for (const uid in g_uploadInfos) {
@@ -322,6 +322,7 @@ function saveSession() {
         }
     }
 
+    await fsp.mkdir(`${__dirname}/uploads`, {recursive: true});
     fsp.writeFile(`${__dirname}/uploads/session.json`, JSON.stringify(sessionObj));
 }
 
@@ -329,8 +330,8 @@ function saveSession() {
 // session if they are still valid
 async function recover() {
     try {
-        const text = fs.readFileSync(`${__dirname}/uploads/session.json`).toString();
-        
+        const text = await fsp.readFile(`${__dirname}/uploads/session.jason`, "utf8");
+
         try {
             const session = JSON.parse(text);
 
