@@ -160,6 +160,7 @@ async function beginUpload() {
     }
 
     fileList.style.display = "none";
+    container.style.cursor = "auto";
     createProgressMatrix();
     console.log("matrix created");
 
@@ -284,7 +285,7 @@ window.onload = () => {
     document.body.onkeyup = e => {e.preventDefault(); g_keyStates[e.key] = false};
     fileInput.onchange = handleFileChange;
     el.onclick = e => {
-        if (e.target.tagName === "DIV") {
+        if (e.target.tagName === "DIV" && !e.target.classList.contains("fileTracker")) {
             fileInput.click();
         }
     };
