@@ -74,13 +74,7 @@ div.dragStarted {
     aspect-ratio: 1 / 1;
     outline: 1px solid var(--accent);
     margin: 0 1px 1px 0;
-}
-
-.matrix::after {
-    content: "";
-    background-color: var(--accent);
-    width: auto;
-    height: auto;
+    transition: background-color 0.2s;
 }
 
 .downloadLink {

@@ -135,21 +135,23 @@ function createProgressMatrix() {
     fileList.style.display = "none";
 
     const matrix = document.createElement("div");
+    matrix.id = "progressMatrix";
     matrix.classList.add("progressMatrix");
-    container.replaceChildren(matrix);
-
+    
     const numFiles = g_files.length;
     const gridSize = lowestSquareAbove(numFiles);
     const width = 100/gridSize;
-
-    progressMatrix.style.gridTemplateColumns = `repeat(auto-fill, ${width}%)`;
-
+    
+    matrix.style.gridTemplateColumns = `repeat(auto-fill, ${width}%)`;
+    
     for (const file of g_files) {
         const span = document.createElement("span");
         span.classList.add("matrix");
-        span.style.backgroundColor = `rgba(0,0,0,0)`;
-        progressMatrix.appendChild(span);
+        span.style.backgroundColor = `transparent`;
+        matrix.appendChild(span);
     }
+
+    container.replaceChildren(matrix);
 }
 
 async function beginUpload() {
@@ -159,6 +161,7 @@ async function beginUpload() {
 
     fileList.style.display = "none";
     createProgressMatrix();
+    console.log("matrix created");
 
     g_uploadStarted = true;
     fileInput.disabled = true;
@@ -195,7 +198,7 @@ async function beginUpload() {
 
         let done = false;
         while (!done) {
-            console.log(`stream ${i}: starting`);
+            console.log(`stream ${i}: upload start`);
             const p = uploadNextChunk();
 
             console.log(`stream ${i}`, p);
@@ -206,14 +209,17 @@ async function beginUpload() {
                 updateProgressBars();
             }
             else {
-                console.log(`stream ${i} all finished`);
                 done = true;
             }
+            
         }
+        console.log(`stream ${i} exiting`);
     };
 
     for (let i = 0; i < c_maxStreams; ++i) {
-        g_activeStreams.push(streamFunc(i));
+        g_activeStreams.push(streamFunc(i).catch(e => {
+            console.error("Stream error: "+ e);
+        }));
     }
 
     await Promise.allSettled(g_activeStreams);
@@ -230,7 +236,7 @@ async function beginUpload() {
 
 function updateProgressBars() {
     g_files.forEach((file, index) => {
-        const {bytesConfirmed, size, listElement} = file;
+        const {bytesConfirmed, size} = file;
         const progress = size === 0 ? 1.0 : Math.floor(bytesConfirmed / size);
     
         totalProgress = g_bytesSent / g_cumulativeSize;
