@@ -330,7 +330,7 @@ async function saveSession() {
 // session if they are still valid
 async function recover() {
     try {
-        const text = await fsp.readFile(`${__dirname}/uploads/session.jason`, "utf8");
+        const text = await fsp.readFile(`${__dirname}/uploads/session.json`, "utf8");
 
         try {
             const session = JSON.parse(text);
@@ -362,6 +362,7 @@ async function recover() {
     // included in the session file
     try {
         const uploads = await fsp.readdir(`${__dirname}/uploads`);
+        console.log(uploads);
 
         for (const entryName of uploads) {
             if (entryName !== "session.json" && !Object.keys(g_uploadInfos).includes(entryName)) {
