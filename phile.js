@@ -6,14 +6,22 @@ const c_alphabet = "abcdefghijklmnopqrstuvwxyz";
 const c_charset = `${c_alphabet}${c_alphabet.toUpperCase()}0123456789_`;
 const c_idLength = 4;
 const c_chunkSize = 1024 ** 2 * 128; //128Mb
+const c_maxTimeBetweenData = 1000 * 30; //30s
+const c_expiryTime = 1000 * 60 * 60 * 24; //24h
 
-const uploadInfo = {};
-const pendingUploads = {};
+const g_uploadInfos = {};
 
 const {
+    HTTP2_HEADER_STATUS,
     HTTP2_HEADER_METHOD,
     HTTP2_HEADER_PATH,
-    HTTP2_HEADER_CONTENT_LENGTH
+    HTTP2_HEADER_CONTENT_LENGTH,
+
+    HTTP_STATUS_OK,
+    HTTP_STATUS_BAD_REQUEST,
+    HTTP_STATUS_NOT_FOUND,
+    HTTP_STATUS_PAYLOAD_TOO_LARGE,
+    HTTP_STATUS_CREATED
 } = http2.constants;
 
 let g_writePromise = Promise.resolve();
@@ -35,77 +43,116 @@ function generateUniqueID() {
 
     do {
         id = generateID();
-    } while (uploadInfo[id] !== undefined);
+    } while (g_uploadInfos[id] !== undefined);
 
     return id;
+}
+
+function respondAndEnd(stream, status, endData = undefined, extraHeaders = {}) {
+    const headers = {
+        [HTTP2_HEADER_STATUS]: status
+    };
+
+    for (const header in extraHeaders) {
+        headers[header] = extraHeaders[header];
+    }
+
+    stream.respond(headers);
+    stream.end(endData);
 }
 
 //send a file normally to the user
 async function sendFile(stream, path) {
     const data = await fsp.readFile(`${__dirname}/${path}`);
-    stream.respond({
-        ":status": 200
-    });
-    stream.end(data);
+    respondAndEnd(stream, HTTP_STATUS_OK, data);
 }
 
-function send404(stream) {
-    stream.respond({":status": 404});
-
-    fsp.readFile(__dirname + "/site/404.html", (err, data) => {
-        if (err) {
-            console.error("Couldn't load 404 file: " + err);
-        }
-        else {
-            stream.end(data);
-        }
-    });
+async function send404(stream) {
+    const data = await fsp.readFile(`${__dirname}/site/404.html`);
+    respondAndEnd(stream, HTTP_STATUS_NOT_FOUND, data);
 }
 
-//sends the file with the given ID to the user
-//with a header to have the browser offer to save
-//it instead of trying to render it
-function sendFileID(stream, id) {
-    if (uploadInfo[id] !== undefined) {
-        const filename = uploadInfo[id].filename;
-        const filePath = `${__dirname}/files/${id}`;
-        
-        stream.writeHead(200, {
-            "Content-Length": fsp.statSync(filePath).size,
-            "Content-Disposition": `attachment; filename="${filename}"`
-        });
-        
-        const readStream = fs.createReadStream(filePath);
-        readStream.pipe(stream);
-        
-        readStream.on("end", () => {
-            const info = uploadInfo[id];
+async function sendFileListPage(stream, uid) {
+    const fileNames = await fsp.readdir(`${__dirname}/uploads/${uid}`);
+    const fileListHTML = fileNames.map(fileName => {
+        return `<a href="/${uid}/${fileName}" class="fileTracker"><p class="fileName">${fileName}</p></a>`;
+    }).join("\r\n");
 
-            --info.dCount;
-            console.log(`Sent ${id}[${info.dCount}]`);  
+    const template = await fsp.readFile(`${__dirname}/site/fileList.html`);
+    const response = template.toString().replace("{FILE_LIST}", fileListHTML);
 
-            if (info.dCount === 0) {
-                deleteFile(id);
-            }
-        });
-    }
-    else {
+    respondAndEnd(stream, HTTP_STATUS_OK, response);
+}
+
+async function sendUploadFile(stream, uid, fileName) {
+    const filePath = `${__dirname}/uploads/${uid}/${fileName}`;
+    let fileInfo = null;
+
+    if (!g_uploadInfos[uid]) {
         send404(stream);
+        return;
     }
+
+    try {
+        fileInfo = await fsp.stat(filePath);
+    }
+    catch {
+        send404(stream);
+        return;
+    }
+    
+    stream.respond({
+        [HTTP2_HEADER_STATUS]: HTTP_STATUS_OK,
+        "content-length": fileInfo.size,
+        "content-disposition": `attachment; filename="${fileName}"`
+    });
+    
+    console.log(`SENDING ${uid}/${fileName}`);
+    const readStream = fs.createReadStream(filePath);
+    readStream.pipe(stream);
+    
+    readStream.on("end", () => {
+        console.log(`SENT ${uid}/${fileName}`);
+    });
 }
 
-function handleNewUploadRequest(stream, headers) {
+function setDeleteTimeout(uid, time = 0, reason = "DELETE") {
+    if (!g_uploadInfos[uid]) {
+        return;
+    }
+
+    clearTimeout(g_uploadInfos[uid].deleteTimeout);
+    g_uploadInfos[uid].deleteTimeout = setTimeout(() => {
+        console.log(`${reason} ${uid}`);
+        delete g_uploadInfos[uid];
+        fsp.rm(`${__dirname}/uploads/${uid}`, {recursive: true});
+    }, time);
+}
+
+async function handleNewUploadRequest(stream, headers) {
     const uid = generateUniqueID();
+    const totalSize = parseInt(headers["total-size"]);
+    const guid = headers["guid"];
 
-    console.log(`NEW ${uid}`);
+    if (!guid || !isFinite(totalSize)) {
+        respondAndEnd(stream, HTTP_STATUS_BAD_REQUEST);
+        return;
+    }
 
-    pendingUploads[uid] = {
+    console.log(`NEW ${uid} [${totalSize}]`);
+
+    g_uploadInfos[uid] = {
         files: {},
-        owner: headers["guid"],
+        owner: guid,
+        totalSize,
+        received: 0,
+        complete: false
     };
-    
-    stream.respond({":status": 200});
-    stream.end(`${uid}/${c_chunkSize}`);    
+
+    setDeleteTimeout(uid, c_maxTimeBetweenData, "FAIL");
+
+    await fsp.mkdir(`${__dirname}/uploads/${uid}`, {recursive: true});
+    respondAndEnd(stream, HTTP_STATUS_CREATED, `${uid}/${c_chunkSize}`);
 }
 
 function receiveFileChunk(stream, headers) {
@@ -130,20 +177,59 @@ function receiveFileChunk(stream, headers) {
     });
 }
 
-async function handleDataRequest(stream, headers) {
+function validateDataRequest(stream, headers) {
     const contentLength = headers[HTTP2_HEADER_CONTENT_LENGTH];
     const uploadId = headers["upload-id"];
     const fileName = headers["file-name"];
-    const offset = headers["offset"];
-    const uploadObj = pendingUploads[uploadId];
-
-    console.log(`DATA ${uploadId}/${fileName} [S: ${offset}, E: ${contentLength}]`);
+    const offset = parseInt(headers["offset"]);
+    const guid = headers["guid"];
+    const uploadObj = g_uploadInfos[uploadId];
+    let valid = true;
     
-    if (!uploadObj || headers["guid"] !== uploadObj.owner) {
-        send404(stream);
-        return;
+    if (!uploadId || !fileName || !isFinite(offset) || !guid) {
+        respondAndEnd(stream, HTTP_STATUS_BAD_REQUEST);
+        valid = false;
     }
     
+    if (!uploadObj) {
+        send404(stream);
+        valid = false;
+    }
+
+    if (guid !== uploadObj.owner) {
+        respondAndEnd(stream, HTTP_STATUS_NOT_AUTHORIZED);
+        valid = false;
+    }
+
+    if (uploadObj.received >= uploadObj.totalSize) {
+        respondAndEnd(stream, HTTP_STATUS_PAYLOAD_TOO_LARGE);
+        valid = false;
+    }
+    
+    console.log(`DATA REQUEST ${valid ? "VALID" : "INVALID"}`);
+
+    if (!valid) {
+        return null;
+    }
+
+    return {contentLength, uploadId, fileName, offset, guid, uploadObj}
+}
+
+async function handleDataRequest(stream, headers) {
+    const requestInfo = validateDataRequest(stream, headers);
+
+    if (!requestInfo) {
+        return;
+    }
+
+    const {
+        contentLength, uploadId, 
+        fileName, offset, uploadObj
+    } = requestInfo;
+    console.log(`DATA ${uploadId}/${fileName} [${offset} - ${contentLength}]`);
+
+    setDeleteTimeout(uploadId, c_maxTimeBetweenData, "FAIL");
+
     let fileObj = uploadObj.files[fileName];
     
     if (!fileObj) {
@@ -154,52 +240,131 @@ async function handleDataRequest(stream, headers) {
             name: fileName
         };
         uploadObj.files[fileName] = fileObj;
-        const dirPath = `${__dirname}/uploads/${uploadId}`;
 
-        fileObj.fdPromise = fsp.mkdir(dirPath, {recursive: true}).then(() => {
-            return fsp.open(`${dirPath}/${fileName}`, "wx");
-        });
+        const dirPath = `${__dirname}/uploads/${uploadId}`;
+        console.log(`OPEN ${uploadId}/${fileName}`);
+        fileObj.fdPromise = fsp.open(`${dirPath}/${fileName}`, "wx");
     }
     
+    // ensure all data request wait for file to be ready for write
     fileObj.fd = await fileObj.fdPromise;
 
-    receiveFileChunk(stream, headers).then(chunkData => {
-        g_writePromise = g_writePromise.then(async () => {
+    const chunkData = await receiveFileChunk(stream, headers);
+
+    g_writePromise = g_writePromise.then(async () => {
+        uploadObj.received += chunkData.length;
+        fileObj.received += chunkData.length;
+
+
+        if (uploadObj.received > uploadObj.totalSize || 
+            fileObj.received > fileObj.size) {
+            respondAndEnd(stream, HTTP_STATUS_PAYLOAD_TOO_LARGE);
+            setDeleteTimeout(uploadId, 0, "EXCEEDED");
+        }
+        else {
+            const uploadComplete = uploadObj.received === uploadObj.totalSize;
             await fileObj.fd.write(chunkData, 0, chunkData.length, offset);
-
-            fileObj.received += chunkData.length;
-            stream.respond({
-                ":status": 200,
-                "received": fileObj.received
-            });
-            stream.end();
-
+            
             if (fileObj.received >= fileObj.size) {
                 console.log(`FIN ${fileObj.name}`);
                 fileObj.fd.close();
                 fileObj.fd = null;
             }
-        }).catch(e => {
-            console.log("Error in promise chain\n", e);
-        });
+            
+            if (uploadComplete) {
+                console.log(`COMPLETE ${uploadId}`);
+                uploadObj.complete = true;
+                uploadObj.completeTime = Date.now();
+                saveSession();
+                setDeleteTimeout(uploadId, c_expiryTime, "EXPIRE");
+            }
+    
+            respondAndEnd(stream, HTTP_STATUS_OK, null, {
+                "received": fileObj.received,
+            });
+        }
+    }).catch(e => {
+        console.log("Error in promise chain\n", e);
     });
 }
 
 function handleFileRequest(stream, headers) {
     const allowedFiles = ["index.html", "main.css", "main.js"];
-    const path = headers[HTTP2_HEADER_PATH].substring(1);
+    const [path1, path2] = headers[HTTP2_HEADER_PATH].substring(1).split("/");
 
-    if (path === "") {
+    if (path1.length === 0) {
         sendFile(stream, "site/index.html");
     }
-    else if (allowedFiles.includes(path)) {
-        sendFile(stream, `site/${path}`);
+    else if (allowedFiles.includes(path1)) {
+        sendFile(stream, `site/${path1}`);
     }
-    else if (Object.keys(pendingUploads).includes(path)) {
-        console.log("TODO, sending actual download page");
+    else if (Object.keys(g_uploadInfos).includes(path1)) {
+        if (path2 !== undefined) {
+            sendUploadFile(stream, path1, path2);
+        }
+        else {
+            sendFileListPage(stream, path1);
+        }
     }
     else {
         send404(stream);
+    }
+}
+
+function saveSession() {
+    const sessionObj = {};
+
+    for (const uid in g_uploadInfos) {
+        const {owner, complete, completeTime} = g_uploadInfos[uid];
+
+        if (complete) {
+            sessionObj[uid] = {owner, completeTime};
+        }
+    }
+
+    fsp.writeFile(`${__dirname}/uploads/session.json`, JSON.stringify(sessionObj));
+}
+
+// Restores uploads from the previous
+// session if they are still valid
+async function recover() {
+    try {
+        const text = fs.readFileSync(`${__dirname}/uploads/session.json`).toString();
+        
+        try {
+            const session = JSON.parse(text);
+
+            for (const uid in session) {
+                const {owner, completeTime} = session[uid];
+
+                if (owner && completeTime) {
+                    g_uploadInfos[uid] = {owner, completeTime};
+                    
+                    const timeDiff = Date.now() - completeTime;
+                    const remainingTime = c_expiryTime - timeDiff;
+    
+                    setDeleteTimeout(uid, remainingTime, "EXPIRE");
+                    console.log(`RESTORE ${uid} [${remainingTime}]`);
+                }
+            }
+        }
+        catch {
+            console.error("Failed to parse session file");
+        }
+    }
+    catch {
+        console.error("No session file found.");
+    }
+
+    // Purge all upload folders that weren't 
+    // included in the session file
+    const uploads = await fsp.readdir(`${__dirname}/uploads`);
+
+    for (const entryName of uploads) {
+        if (entryName !== "session.json" && !Object.keys(g_uploadInfos).includes(entryName)) {
+            console.log(`PURGE ${entryName}`);
+            await fsp.rm(`${__dirname}/uploads/${entryName}`, {recursive: true});
+        }
     }
 }
 
@@ -216,20 +381,28 @@ server.on("error", e => console.error(e));
 server.on("stream", (stream, headers) => {
     const method = headers[HTTP2_HEADER_METHOD];
 
-    if (method === "GET")
-    {
-        handleFileRequest(stream, headers);
-    }
-    else if (method === "POST")
-    {
-        handleNewUploadRequest(stream, headers);
-    }
-    else if (method === "PATCH")
-    {
-        handleDataRequest(stream, headers);
+    console.log(`${method} ${headers[HTTP2_HEADER_PATH]}`);
+
+    switch(method) {
+        case "GET":
+            handleFileRequest(stream, headers);
+            break;
+
+        case "POST":
+            handleNewUploadRequest(stream, headers);
+            break;
+
+        case "PATCH":
+            handleDataRequest(stream, headers);
+            break;
+
+        default:
+            console.log("NO HANDLER");
     }
 });
 
-server.listen(options, () => {
-    console.log(`Listening on ${options.port}`);
+recover().then(() => {
+    server.listen(options, () => {
+        console.log(`Listening on ${options.port}`);
+    });
 });
