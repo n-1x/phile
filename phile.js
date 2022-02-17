@@ -1,4 +1,4 @@
-const http = require("http");
+const http2 = require("http2");
 const fsp = require("fs/promises");
 const fs = require("fs");
 
@@ -9,6 +9,12 @@ const c_chunkSize = 1024 ** 2 * 128; //128Mb
 
 const uploadInfo = {};
 const pendingUploads = {};
+
+const {
+    HTTP2_HEADER_METHOD,
+    HTTP2_HEADER_PATH,
+    HTTP2_HEADER_CONTENT_LENGTH
+} = http2.constants;
 
 let g_writePromise = Promise.resolve();
 
@@ -35,21 +41,23 @@ function generateUniqueID() {
 }
 
 //send a file normally to the user
-async function sendFile(res, path) {
+async function sendFile(stream, path) {
     const data = await fsp.readFile(`${__dirname}/${path}`);
-    res.writeHead(200);
-    res.end(data);
+    stream.respond({
+        ":status": 200
+    });
+    stream.end(data);
 }
 
-function send404(res) {
-    res.writeHead(404, "File not found.");
+function send404(stream) {
+    stream.respond({":status": 404});
 
     fsp.readFile(__dirname + "/site/404.html", (err, data) => {
         if (err) {
             console.error("Couldn't load 404 file: " + err);
         }
         else {
-            res.end(data);
+            stream.end(data);
         }
     });
 }
@@ -57,18 +65,18 @@ function send404(res) {
 //sends the file with the given ID to the user
 //with a header to have the browser offer to save
 //it instead of trying to render it
-function sendFileID(res, id) {
+function sendFileID(stream, id) {
     if (uploadInfo[id] !== undefined) {
         const filename = uploadInfo[id].filename;
         const filePath = `${__dirname}/files/${id}`;
         
-        res.writeHead(200, {
+        stream.writeHead(200, {
             "Content-Length": fsp.statSync(filePath).size,
             "Content-Disposition": `attachment; filename="${filename}"`
         });
         
         const readStream = fs.createReadStream(filePath);
-        readStream.pipe(res);
+        readStream.pipe(stream);
         
         readStream.on("end", () => {
             const info = uploadInfo[id];
@@ -82,56 +90,57 @@ function sendFileID(res, id) {
         });
     }
     else {
-        send404(res);
+        send404(stream);
     }
 }
 
-function handleNewUploadRequest(req, res) {
+function handleNewUploadRequest(stream, headers) {
     const uid = generateUniqueID();
 
     console.log(`NEW ${uid}`);
+
     pendingUploads[uid] = {
         files: {},
-        owner: req.headers["guid"],
+        owner: headers["guid"],
     };
     
-    res.writeHead(200);
-    res.end(`${uid}/${c_chunkSize}`);    
+    stream.respond({":status": 200});
+    stream.end(`${uid}/${c_chunkSize}`);    
 }
 
-function receiveFileChunk(req) {
+function receiveFileChunk(stream, headers) {
     return new Promise((resolve, reject) => {
-        const contentLength = Math.min(req.headers["content-length"], c_chunkSize);
+        const contentLength = Math.min(headers[HTTP2_HEADER_CONTENT_LENGTH], c_chunkSize);
         const bufferSize = isFinite(contentLength) ? contentLength : c_chunkSize;
 
         const data = Buffer.alloc(bufferSize);
         let bytesReceived = 0;
     
-        req.on("error", e => {
+        stream.on("error", e => {
             reject(e);
         });
         
-        req.on("data", chunk => {
+        stream.on("data", chunk => {
             bytesReceived += chunk.copy(data, bytesReceived);
         });
         
-        req.on("end", () => {
+        stream.on("end", () => {
             resolve(data);
         });
     });
 }
 
-async function handleDataRequest(req, res) {
-    const uploadId = req.headers["upload-id"];
-    const fileName = req.headers["file-name"];
-    const offset = req.headers["offset"];
+async function handleDataRequest(stream, headers) {
+    const contentLength = headers[HTTP2_HEADER_CONTENT_LENGTH];
+    const uploadId = headers["upload-id"];
+    const fileName = headers["file-name"];
+    const offset = headers["offset"];
     const uploadObj = pendingUploads[uploadId];
 
-    console.log(`DATA ${uploadId}/${fileName} [S: ${offset}, E: ${req.headers["content-length"]}]`);
+    console.log(`DATA ${uploadId}/${fileName} [S: ${offset}, E: ${contentLength}]`);
     
-    if (!uploadObj || req.headers["guid"] !== uploadObj.owner) {
-        res.writeHead(400);
-        res.end();
+    if (!uploadObj || headers["guid"] !== uploadObj.owner) {
+        send404(stream);
         return;
     }
     
@@ -140,7 +149,7 @@ async function handleDataRequest(req, res) {
     if (!fileObj) {
         fileObj = {
             received: 0,
-            size: req.headers["file-size"],
+            size: headers["file-size"],
             fd: null,
             name: fileName
         };
@@ -154,14 +163,16 @@ async function handleDataRequest(req, res) {
     
     fileObj.fd = await fileObj.fdPromise;
 
-    receiveFileChunk(req).then(chunkData => {
+    receiveFileChunk(stream, headers).then(chunkData => {
         g_writePromise = g_writePromise.then(async () => {
             await fileObj.fd.write(chunkData, 0, chunkData.length, offset);
 
             fileObj.received += chunkData.length;
-            console.log("Received: " + chunkData.length);
-            res.writeHead(200, {"received": fileObj.received});
-            res.end();
+            stream.respond({
+                ":status": 200,
+                "received": fileObj.received
+            });
+            stream.end();
 
             if (fileObj.received >= fileObj.size) {
                 console.log(`FIN ${fileObj.name}`);
@@ -174,44 +185,50 @@ async function handleDataRequest(req, res) {
     });
 }
 
-function handleFileRequest(req, res) {
+function handleFileRequest(stream, headers) {
     const allowedFiles = ["index.html", "main.css", "main.js"];
-    const url = new URL(req.url, `http://${req.headers.host}`);
-    const path = url.pathname.substring(1, url.pathname.length);
+    const path = headers[HTTP2_HEADER_PATH].substring(1);
 
     if (path === "") {
-        sendFile(res, "site/index.html");
+        sendFile(stream, "site/index.html");
     }
     else if (allowedFiles.includes(path)) {
-        sendFile(res, `site/${path}`);
+        sendFile(stream, `site/${path}`);
     }
     else if (Object.keys(pendingUploads).includes(path)) {
         console.log("TODO, sending actual download page");
     }
     else {
-        send404(res);
+        send404(stream);
     }
 }
-
-const server = http.createServer((req, res) => {
-    if (req.method === "GET")
-    {
-        handleFileRequest(req, res);
-    }
-    else if (req.method === "POST")
-    {
-        handleNewUploadRequest(req, res);
-    }
-    else if (req.method === "PATCH")
-    {
-        handleDataRequest(req, res);
-    }
-});
 
 const options = {
     port: 1880,
-    host: "0.0.0.0"
-}
+    host: "0.0.0.0",
+    key: fs.readFileSync("localhost-privkey.pem"),
+    cert: fs.readFileSync("localhost-cert.pem"),
+};
+
+const server = http2.createSecureServer(options);
+server.on("error", e => console.error(e));
+
+server.on("stream", (stream, headers) => {
+    const method = headers[HTTP2_HEADER_METHOD];
+
+    if (method === "GET")
+    {
+        handleFileRequest(stream, headers);
+    }
+    else if (method === "POST")
+    {
+        handleNewUploadRequest(stream, headers);
+    }
+    else if (method === "PATCH")
+    {
+        handleDataRequest(stream, headers);
+    }
+});
 
 server.listen(options, () => {
     console.log(`Listening on ${options.port}`);
