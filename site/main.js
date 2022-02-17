@@ -296,7 +296,7 @@ window.onload = () => {
             g_longTouchTimeout = setTimeout(beginUpload, c_longPressTime);
             container.style.backgroundColor = "#222"; 
         }
-    }
+    };
     el.ontouchmove = e => {
         if (Object.keys(g_fileMap).length > 0) {
             const {screenX, screenY} = e.changedTouches[0];
@@ -307,7 +307,7 @@ window.onload = () => {
                 clearTouch();
             }
         }
-    }
+    };
     el.ontouchend = clearTouch;
     el.ondragover = e => {
         e.preventDefault();
