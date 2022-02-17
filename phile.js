@@ -75,7 +75,7 @@ async function send404(stream) {
 async function sendFileListPage(stream, uid) {
     const fileNames = await fsp.readdir(`${__dirname}/uploads/${uid}`);
     const fileListHTML = fileNames.map(fileName => {
-        return `<a href="/${uid}/${fileName}" class="fileTracker"><p class="fileName">${fileName}</p></a>`;
+        return `<a href="/${uid}/${encodeURI(fileName)}" class="fileTracker"><p class="fileName">${fileName}</p></a>`;
     }).join("\r\n");
 
     const template = await fsp.readFile(`${__dirname}/site/fileList.html`);
@@ -300,7 +300,7 @@ function handleFileRequest(stream, headers) {
     }
     else if (Object.keys(g_uploadInfos).includes(path1)) {
         if (path2) {
-            sendUploadFile(stream, path1, path2);
+            sendUploadFile(stream, path1, decodeURI(path2));
         }
         else {
             sendFileListPage(stream, path1);
@@ -372,6 +372,8 @@ async function recover() {
     catch {
         console.log("Nothing to purge.");
     }
+
+    saveSession();
 }
 
 const options = {
