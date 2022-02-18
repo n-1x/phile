@@ -58,8 +58,10 @@ function respondAndEnd(stream, status, endData = undefined, extraHeaders = {}) {
         headers[header] = extraHeaders[header];
     }
 
-    stream.respond(headers);
-    stream.end(endData);
+    if (!stream.destroyed) {
+        stream.respond(headers);
+        stream.end(endData);
+    }
 }
 
 //send a file normally to the user
@@ -101,20 +103,22 @@ async function sendUploadFile(stream, uid, fileName) {
         send404(stream);
         return;
     }
-    
-    stream.respond({
-        [HTTP2_HEADER_STATUS]: HTTP_STATUS_OK,
-        "content-length": fileInfo.size,
-        "content-disposition": `attachment; filename="${fileName}"`
-    });
-    
-    console.log(`SENDING ${uid}/${fileName}`);
-    const readStream = fs.createReadStream(filePath);
-    readStream.pipe(stream);
-    
-    readStream.on("end", () => {
-        console.log(`SENT ${uid}/${fileName}`);
-    });
+
+    if (!stream.destroyed) {
+        stream.respond({
+            [HTTP2_HEADER_STATUS]: HTTP_STATUS_OK,
+            "content-length": fileInfo.size,
+            "content-disposition": `attachment; filename="${fileName}"`
+        });
+        
+        console.log(`SENDING ${uid}/${fileName}`);
+        const readStream = fs.createReadStream(filePath);
+        readStream.pipe(stream);
+        
+        readStream.on("end", () => {
+            console.log(`SENT ${uid}/${fileName}`);
+        });
+    }
 }
 
 function setDeleteTimeout(uid, time = 0, reason = "DELETE") {
@@ -429,12 +433,8 @@ server.on("stream", (stream, headers) => {
 
     console.log(`${method} ${headers[HTTP2_HEADER_PATH]}`);
 
-    stream.on("close", e => {
-        console.log("Stream destroyed: ", e);
-    });
-
     stream.on("error", e => {
-        console.log("Stream error: " + e);
+        console.log("Network error: " + e);
     });
 
     switch(method) {
