@@ -6,7 +6,9 @@ const c_alphabet = "abcdefghijklmnopqrstuvwxyz";
 const c_charset = `${c_alphabet}${c_alphabet.toUpperCase()}0123456789_`;
 const c_idLength = 4;
 const c_chunkSize = 1024 ** 2 * 128; //128Mb
-const c_maxTimeBetweenData = 1000 * 30; //30s
+// Calculated as how long it would take to upload a chunk with a
+// network speed of 200kb/s
+const c_maxTimeBetweenData = 1000 * (c_chunkSize / (1024 * 200));
 const c_expiryTime = 1000 * 60 * 60 * 24; //24h
 
 const g_uploadInfos = {};
@@ -386,7 +388,7 @@ async function recover() {
                     const remainingTime = c_expiryTime - timeDiff;
 
                     setDeleteTimeout(uid, remainingTime, "EXPIRE");
-                    
+
                     console.log(`RESTORE ${uid} [${remainingTime}]`);
                 }
             }
