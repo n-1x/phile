@@ -380,19 +380,19 @@ async function recover() {
                 const {owner, completeTime} = session[uid];
 
                 if (owner && completeTime) {
-                    console.log(`RESTORE ${uid} [${remainingTime}]`);
-
                     g_uploadInfos[uid] = {owner, completeTime};
                     
                     const timeDiff = Date.now() - completeTime;
                     const remainingTime = c_expiryTime - timeDiff;
-    
+
                     setDeleteTimeout(uid, remainingTime, "EXPIRE");
+                    
+                    console.log(`RESTORE ${uid} [${remainingTime}]`);
                 }
             }
         }
-        catch {
-            console.error("Failed to parse session file");
+        catch (e) {
+            console.error("Failed to parse session file", e);
         }
     }
     catch {
