@@ -24,7 +24,8 @@ const {
     HTTP_STATUS_CREATED
 } = http2.constants;
 
-let g_writePromise = Promise.resolve();
+const g_writePromises = {};
+const g_writeQueues = {};
 
 //generate an ID of random letters in mixed case
 function generateID() {
@@ -215,6 +216,59 @@ function validateDataRequest(stream, headers) {
     return {contentLength, uploadId, fileName, offset, guid, uploadObj}
 }
 
+async function writeChunk(chunkInfo) {
+    const {stream, uploadId, uploadObj, 
+        fileObj, chunkData, 
+        offset} = chunkInfo;
+
+    uploadObj.received += chunkData.length;
+    fileObj.received += chunkData.length;
+
+    if (uploadObj.received > uploadObj.totalSize || 
+        fileObj.received > fileObj.size) {
+        respondAndEnd(stream, HTTP_STATUS_PAYLOAD_TOO_LARGE);
+        setDeleteTimeout(uploadId, 0, "EXCEEDED");
+    }
+    else {
+        const uploadComplete = uploadObj.received === uploadObj.totalSize;
+        await fileObj.fd.write(chunkData, 0, chunkData.length, offset);
+        
+        if (fileObj.received >= fileObj.size) {
+            console.log(`FIN ${fileObj.name}`);
+            fileObj.fd.close();
+            fileObj.fd = null;
+        }
+        
+        if (uploadComplete) {
+            console.log(`COMPLETE ${uploadId}`);
+            uploadObj.complete = true;
+            uploadObj.completeTime = Date.now();
+            saveSession();
+            setDeleteTimeout(uploadId, c_expiryTime, "EXPIRE");
+        }
+
+        respondAndEnd(stream, HTTP_STATUS_OK, null, {
+            "received": fileObj.received,
+        });
+    }
+}
+
+// Writes the first item in the queue for that file
+// then checks for another item. Repeats until the queue
+// is empty. This is because we shouldn't call fsp.write
+// again for a given file until the previous promise is
+// resolved.
+async function writeAllQueue(fileName) {
+    let nextObj = g_writeQueues[fileName].shift();
+
+    while (nextObj) {
+        await writeChunk(nextObj);
+        nextObj = g_writeQueues[fileName].shift();
+    }
+
+    delete g_writePromises[fileName];
+}
+
 async function handleDataRequest(stream, headers) {
     const requestInfo = validateDataRequest(stream, headers);
 
@@ -250,42 +304,25 @@ async function handleDataRequest(stream, headers) {
     fileObj.fd = await fileObj.fdPromise;
 
     const chunkData = await receiveFileChunk(stream, headers);
+    const chunkInfo = {stream, uploadId, 
+        uploadObj, fileObj, chunkData, offset};
 
-    g_writePromise = g_writePromise.then(async () => {
-        uploadObj.received += chunkData.length;
-        fileObj.received += chunkData.length;
+    // Add the data to a file specific queue
+    if (!g_writeQueues[fileName]) {
+        g_writeQueues[fileName] = [chunkInfo];
+    }
+    else {
+        g_writeQueues[fileName].push(chunkInfo);
+    }
 
-
-        if (uploadObj.received > uploadObj.totalSize || 
-            fileObj.received > fileObj.size) {
-            respondAndEnd(stream, HTTP_STATUS_PAYLOAD_TOO_LARGE);
-            setDeleteTimeout(uploadId, 0, "EXCEEDED");
-        }
-        else {
-            const uploadComplete = uploadObj.received === uploadObj.totalSize;
-            await fileObj.fd.write(chunkData, 0, chunkData.length, offset);
-            
-            if (fileObj.received >= fileObj.size) {
-                console.log(`FIN ${fileObj.name}`);
-                fileObj.fd.close();
-                fileObj.fd = null;
-            }
-            
-            if (uploadComplete) {
-                console.log(`COMPLETE ${uploadId}`);
-                uploadObj.complete = true;
-                uploadObj.completeTime = Date.now();
-                saveSession();
-                setDeleteTimeout(uploadId, c_expiryTime, "EXPIRE");
-            }
-    
-            respondAndEnd(stream, HTTP_STATUS_OK, null, {
-                "received": fileObj.received,
-            });
-        }
-    }).catch(e => {
-        console.log("Error in promise chain\n", e);
-    });
+    // if it isn't already running, start a promise to
+    // write everything in the queue, else do nothing as
+    // the currently running promise will write this data
+    if (!g_writePromises[fileName]) {
+        console.log("Write promise started for " + fileName);
+        g_writePromises[fileName] = writeAllQueue(fileName)
+            .catch(e => console.error("Error in write promise: ", e));
+    }
 }
 
 function handleFileRequest(stream, headers) {
