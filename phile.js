@@ -429,6 +429,14 @@ server.on("stream", (stream, headers) => {
 
     console.log(`${method} ${headers[HTTP2_HEADER_PATH]}`);
 
+    stream.on("close", e => {
+        console.log("Stream destroyed: ", e);
+    });
+
+    stream.on("error", e => {
+        console.log("Stream error: " + e);
+    });
+
     switch(method) {
         case "GET":
             handleFileRequest(stream, headers);
@@ -444,6 +452,7 @@ server.on("stream", (stream, headers) => {
 
         default:
             console.log("NO HANDLER");
+            respondAndEnd(stream, HTTP_STATUS_BAD_REQUEST);
     }
 });
 
