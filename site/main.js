@@ -79,7 +79,7 @@ async function uploadChunk(blob, startByte, fileIndex) {
         method: "PATCH",
         headers: {
             "upload-id": g_uploadID,
-            "file-name": file.name,
+            "file-name": btoa(encodeURIComponent(file.name)),
             "file-size": file.size,
             "offset": startByte,
             "guid": g_guid,

@@ -110,7 +110,7 @@ async function sendUploadFile(stream, uid, fileName) {
         stream.respond({
             [HTTP2_HEADER_STATUS]: HTTP_STATUS_OK,
             "content-length": fileInfo.size,
-            "content-disposition": `attachment; filename="${fileName}"`
+            "content-disposition": `attachment; filename="${encodeURI(fileName)}"`
         });
         
         console.log(`SENDING ${uid}/${fileName}`);
@@ -187,11 +187,17 @@ function receiveFileChunk(stream, headers) {
 function validateDataRequest(stream, headers) {
     const contentLength = headers[HTTP2_HEADER_CONTENT_LENGTH];
     const uploadId = headers["upload-id"];
-    const fileName = headers["file-name"];
     const offset = parseInt(headers["offset"]);
     const guid = headers["guid"];
     const uploadObj = g_uploadInfos[uploadId];
+
+    let fileName = "";
     let valid = true;
+    
+    try {
+        fileName = decodeURIComponent(Buffer.from(headers["file-name"], "base64"));
+    }
+    catch (e) { console.error("Failed to parse file-name header") }
     
     if (!uploadId || !fileName || !isFinite(offset) || !guid) {
         respondAndEnd(stream, HTTP_STATUS_BAD_REQUEST);
@@ -334,6 +340,8 @@ async function handleDataRequest(stream, headers) {
 function handleFileRequest(stream, headers) {
     const allowedFiles = ["index.html", "main.css", "main.js"];
     const [path1, path2] = headers[HTTP2_HEADER_PATH].substring(1).split("/");
+
+    console.log(path1, path2)
 
     if (path1.length === 0) {
         sendFile(stream, "site/index.html");
