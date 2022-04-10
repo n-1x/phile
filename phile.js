@@ -1,4 +1,5 @@
 const http2 = require("http2");
+const http = require("http");
 const fsp = require("fs/promises");
 const fs = require("fs");
 
@@ -471,3 +472,13 @@ recover().then(() => {
         console.log(`Listening on ${options.port}`);
     });
 });
+
+// https redirect server
+const redirectServer = http.createServer((req, res) => {
+    res.writeHead(301, {
+        "Location": `https://${req.url}`
+    });
+    res.end();
+});
+
+redirectServer.listen(42080);
