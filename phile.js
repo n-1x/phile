@@ -80,7 +80,7 @@ async function send404(stream) {
 async function sendFileListPage(stream, uid) {
     const fileNames = await fsp.readdir(`${__dirname}/uploads/${uid}`);
     const fileListHTML = fileNames.map(fileName => {
-        return `<a href="/${uid}/${encodeURI(fileName)}" class="fileTracker download"><p class="fileName">${fileName}</p></a>`;
+        return `<a href="/${uid}/${encodeURI(fileName)}" class="fileTracker download" download><p class="fileName">${fileName}</p></a>`;
     }).join("\r\n");
 
     const template = await fsp.readFile(`${__dirname}/site/fileList.html`);
