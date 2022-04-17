@@ -80,7 +80,7 @@ async function send404(stream) {
 async function sendFileListPage(stream, uid) {
     const fileNames = await fsp.readdir(`${__dirname}/uploads/${uid}`);
     const fileListHTML = fileNames.map(fileName => {
-        return `<a href="/${uid}/${encodeURI(fileName)}" class="fileTracker"><p class="fileName">${fileName}</p></a>`;
+        return `<a href="/${uid}/${encodeURI(fileName)}" class="fileTracker download"><p class="fileName">${fileName}</p></a>`;
     }).join("\r\n");
 
     const template = await fsp.readFile(`${__dirname}/site/fileList.html`);
@@ -132,7 +132,7 @@ function setDeleteTimeout(uid, time = 0, reason = "DELETE") {
     g_uploadInfos[uid].deleteTimeout = setTimeout(() => {
         console.log(`${reason} ${uid}`);
         delete g_uploadInfos[uid];
-        fsp.rm(`${__dirname}/uploads/${uid}`, {recursive: true});
+        fsp.rmdir(`${__dirname}/uploads/${uid}`, {recursive: true});
     }, time);
 }
 
@@ -259,6 +259,7 @@ async function writeChunk(chunkInfo) {
             setDeleteTimeout(uploadId, c_expiryTime, "EXPIRE");
         }
 
+        console.log("RESPONDING RECEIVED: ", fileObj.received);
         respondAndEnd(stream, HTTP_STATUS_OK, null, {
             "received": fileObj.received,
         });
