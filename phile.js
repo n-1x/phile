@@ -439,9 +439,10 @@ const server = http2.createSecureServer(options);
 server.on("error", e => console.error(e));
 
 server.on("stream", (stream, headers) => {
+    const address = stream.session.socket.remoteAddress;
     const method = headers[HTTP2_HEADER_METHOD];
 
-    console.log(`${method} ${headers[HTTP2_HEADER_PATH]}`);
+    console.log(`[${address}] ${method} ${headers[HTTP2_HEADER_PATH]}`);
 
     stream.on("error", e => {
         console.log("Network error: " + e);
