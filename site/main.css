@@ -2,13 +2,15 @@
     --accentR: 0;
     --accentG: 255;
     --accentB: 0;
-    --accent: rgb(var(--accentR), var(--accentG), var(--accentB))
+    --accent: rgb(var(--accentR), var(--accentG), var(--accentB));
+    --hover: rgba(var(--accentR), var(--accentG), var(--accentB), 0.3);
 }
 
 html {
     font-family: monospace;
     font-size: 1.5rem;
     text-align: center;
+    box-sizing: content-box;
 }
 
 body {
@@ -26,30 +28,45 @@ a:visited {
     color: var(--accent);
 }
 
+button {
+    background-color: transparent;
+    color: var(--accent);
+    border: 2px solid var(--accent);
+    font-size: 1rem;
+    width: 20vw;
+    height: 6vh;
+}
+
+:is(button, .fileTracker):hover {
+    background-color: var(--hover);
+}
+
 .container {
     width: 100vw;
     height: 100vh;
+    box-sizing: border-box;
+    padding: 2vh;
     display: flex;
+    gap: 1vh;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-start;
     background-color: black;
-    cursor: pointer;
 }
 
 .fileList {
-    display: grid;
     width: 100vw;
     max-width: 35ch;
-    height: 80vh;
-    overflow-y: auto;
-    align-content: top;
-    grid-auto-rows: 2ch;
+    max-height: 80vh;
+    overflow: auto;
 }
 
 .fileName {
     margin: 0;
-    padding: 0 0.5ch;
+}
+
+.flexLast {
+    margin-top: auto;
 }
 
 div.dragStarted {
@@ -57,20 +74,22 @@ div.dragStarted {
 }
 
 .fileTracker {
+    box-sizing: border-box;
+    min-height: 2ch;
     border: 1px solid;
-    height: 100%;
     white-space: nowrap;
     overflow: hidden;
     text-align: left;
     display: flex;
+    user-select: none;
 }
 
 .fileTracker:not(:last-child) {
     border-bottom: none;
 }
 
-.fileTracker:hover {
-    background: #222;
+.fileTracker:hover:not(.download) {
+    text-decoration: line-through;
 }
 
 .progressMatrix {

@@ -9,9 +9,11 @@
     </head>
 
     <body>
-        <input id="fileInput" style="display: none" type="file" multiple>
+        <input id="fileInput" type="file" multiple hidden>
         <div id="container" class="container">
+            <button onclick="openFileDialogue()">+</button>
             <div id="fileList" class="fileList"></div>
+            <button onclick="beginUpload()" class="flexLast">></button>
         </div>
     </body>
 </html>

@@ -1,16 +1,14 @@
-const c_fileNameMaxDisplayLength = 16;
-const c_longPressTime = 500;
-const c_maxStreams = 16;
+const c_fileNameMaxDisplayLength = 24;
+const c_maxStreams = 4;
 const g_keyStates = {};
 const g_fileMap = {};
-let g_files = null;
+
+let container = null;
+
 let g_guid = window.localStorage.getItem("guid");
 let g_uploadID = null;
-let g_longTouchTimeout = null;
 let g_uploadStarted = false;
-let g_bytesSent = 0;
 let g_cumulativeSize = 0;
-let g_touchStartLoc = null;
 let g_currentFileStartByte = 0;
 let g_currentFileIndex = 0;
 let g_activeStreams = [];
@@ -40,7 +38,6 @@ function addUniqueFileNames(fileList) {
         g_fileMap[file.name.toLowerCase()] = file;
         file.bytesConfirmed = 0;
     });
-    g_files = Object.values(g_fileMap);
     updateFileNamesList();
 }
 
@@ -56,7 +53,7 @@ function updateFileNamesList() {
         nameP.innerText = cutName(fileName);
 
         element.appendChild(nameP);
-        element.onclick = () => {
+        element.onclick = e => {
             if (!g_uploadStarted) {
                 delete g_fileMap[fileName];
                 element.remove();
@@ -72,8 +69,7 @@ function updateFileNamesList() {
 }
 
 async function uploadChunk(blob, startByte, fileIndex) {
-    const file = g_files[fileIndex];
-    g_bytesSent += blob.size;
+    const file = Object.values(g_fileMap)[fileIndex];
 
     const response = await fetch("/", {
         method: "PATCH",
@@ -93,6 +89,7 @@ async function uploadChunk(blob, startByte, fileIndex) {
     else {
         file.success ||= response.ok;
     }
+
     file.bytesConfirmed = Math.max(
         file.bytesConfirmed,
         parseInt(response.headers.get("received"))
@@ -100,7 +97,7 @@ async function uploadChunk(blob, startByte, fileIndex) {
 }
 
 function getNextChunk(chunkSize) {
-    const file = g_files[g_currentFileIndex];
+    const file = Object.values(g_fileMap)[g_currentFileIndex];
 
     if (!file) {
         return null;
@@ -138,13 +135,13 @@ function createProgressMatrix() {
     matrix.id = "progressMatrix";
     matrix.classList.add("progressMatrix");
     
-    const numFiles = g_files.length;
+    const numFiles = Object.values(g_fileMap).length;
     const gridSize = lowestSquareAbove(numFiles);
     const width = 100/gridSize;
     
     matrix.style.gridTemplateColumns = `repeat(auto-fill, ${width}%)`;
     
-    for (const file of g_files) {
+    for (let i = 0; i < numFiles; ++i) {
         const span = document.createElement("span");
         span.classList.add("matrix");
         span.style.backgroundColor = `transparent`;
@@ -155,21 +152,18 @@ function createProgressMatrix() {
 }
 
 async function beginUpload() {
-    if (g_uploadStarted || g_fileMap.length === 0) {
+    if (g_uploadStarted || Object.values(g_fileMap).length === 0) {
         return;
     }
 
     fileList.style.display = "none";
     container.style.cursor = "auto";
     createProgressMatrix();
-    console.log("matrix created");
 
     g_uploadStarted = true;
     fileInput.disabled = true;
 
-    for (const file of g_files) {
-        g_cumulativeSize += file.size;
-    }
+    Object.values(g_fileMap).forEach(({size}) => g_cumulativeSize += size);
 
     const info = (await (await fetch("/", 
     {
@@ -196,18 +190,12 @@ async function beginUpload() {
     };
 
     const streamFunc = async (i) => {
-        console.log(`stream ${i}: begin`);
-
         let done = false;
         while (!done) {
-            console.log(`stream ${i}: upload start`);
             const p = uploadNextChunk();
-
-            console.log(`stream ${i}`, p);
 
             if (p !== null) {
                 await p;
-                console.log(`stream ${i}: upload complete`);
                 updateProgressBars();
             }
             else {
@@ -215,7 +203,6 @@ async function beginUpload() {
             }
             
         }
-        console.log(`stream ${i} exiting`);
     };
 
     for (let i = 0; i < c_maxStreams; ++i) {
@@ -226,8 +213,6 @@ async function beginUpload() {
 
     await Promise.allSettled(g_activeStreams);
 
-    console.log("All files complete");
-
     const link = document.createElement("a");
     link.classList.add("downloadLink");
     link.innerText = g_uploadID;
@@ -237,16 +222,18 @@ async function beginUpload() {
 }
 
 function updateProgressBars() {
-    g_files.forEach((file, index) => {
+    let totalConfirmed = 0;
+
+    Object.values(g_fileMap).forEach((file, index) => {
         const {bytesConfirmed, size} = file;
-        const progress = size === 0 ? 1.0 : Math.floor(bytesConfirmed / size);
-    
-        totalProgress = g_bytesSent / g_cumulativeSize;
-        document.title = `> ${Math.floor(totalProgress * 100)}%`;
-    
-        progressMatrix.children[index].style.backgroundColor = 
-            `rgba(${g_accentColour[0]}, ${g_accentColour[1]}, ${g_accentColour[2]}, ${progress})`;
+        const fileProgress = size === 0 ? 1.0 : (bytesConfirmed / size) * 100;
+        totalConfirmed += bytesConfirmed;
+        progressMatrix.children[index].style.background = 
+        `linear-gradient(to top, var(--accent) ${fileProgress}%, black ${fileProgress}%)`;
     });
+
+    const totalProgress = totalConfirmed / g_cumulativeSize;
+    document.title = `> ${Math.floor(totalProgress * 100)}%`;
 }
 
 function handleFileChange() {
@@ -257,9 +244,7 @@ function handleKeyDown(e) {
     g_keyStates[e.key] = true;
 
     if (g_keyStates["Enter"] || g_keyStates[" "]) {
-        if (Object.keys(g_fileMap).length) {
-            beginUpload();
-        }
+        beginUpload();
     }
 
     if (g_keyStates["a"]) {
@@ -267,60 +252,26 @@ function handleKeyDown(e) {
     }
 }
 
-function clearTouch() {
-    container.style.backgroundColor = `black`;
-    clearTimeout(g_longTouchTimeout);
-    g_longTouchTimeout = null;
+function openFileDialogue() {
+    fileInput.click();
 }
 
 window.onload = () => {
-    const el = container;
+    container = document.getElementById("container");
     
-    const style = getComputedStyle(document.querySelector(":root"));
-    g_accentColour[0] = style.getPropertyValue("--accentR");
-    g_accentColour[1] = style.getPropertyValue("--accentG");
-    g_accentColour[2] = style.getPropertyValue("--accentB");
-
     document.body.onkeydown = handleKeyDown;
     document.body.onkeyup = e => {e.preventDefault(); g_keyStates[e.key] = false};
     fileInput.onchange = handleFileChange;
-    el.onclick = e => {
-        if (e.target.tagName === "DIV" && !e.target.classList.contains("fileTracker")) {
-            fileInput.click();
-        }
-    };
-    el.ontouchstart = e => {
-        if (Object.keys(g_fileMap).length > 0) {
-            const {screenX, screenY} = e.changedTouches[0];
-            g_touchStartLoc = [screenX, screenY];
-            g_longTouchTimeout = setTimeout(beginUpload, c_longPressTime);
-            container.style.backgroundColor = "#222"; 
-        }
-    };
-    el.ontouchmove = e => {
-        if (Object.keys(g_fileMap).length > 0) {
-            const {screenX, screenY} = e.changedTouches[0];
-            const dTouch = [screenX - g_touchStartLoc[0], screenY - g_touchStartLoc[1]];
-            const distSq = dTouch[0]**2 + dTouch[1]**2;
-            
-            if (g_longTouchTimeout && distSq > 60) {
-                clearTouch();
-            }
-        }
-    };
-    el.ontouchend = clearTouch;
-    el.ondragover = e => {
+    container.ondragover = e => {
         e.preventDefault();
         container.classList.add("dragStarted");
     };
-    el.ondragleave = () => container.classList.remove("dragStarted");;
-    el.ondrop = e => {
+    container.ondragleave = () => container.classList.remove("dragStarted");
+    container.ondrop = e => {
         e.preventDefault();
         container.classList.remove("dragStarted");
         addUniqueFileNames(e.dataTransfer.files);
     };
-
-    container.style.transition = `background-color ${c_longPressTime}ms`;
 }
 
 if (g_guid === null) {
