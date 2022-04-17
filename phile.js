@@ -3,9 +3,8 @@ const http = require("http");
 const fsp = require("fs/promises");
 const fs = require("fs");
 
-const c_alphabet = "abcdefghijklmnopqrstuvwxyz";
-const c_charset = `${c_alphabet}${c_alphabet.toUpperCase()}0123456789_`;
-const c_idLength = 4;
+const c_charset = "abcdefghijklmnopqrstuvwxyz";
+const c_idLength = 6;
 const c_chunkSize = 1024 ** 2 * 128; //128Mb
 // Calculated as how long it would take to upload a chunk with a
 // network speed of 200kb/s
@@ -341,6 +340,7 @@ async function handleDataRequest(stream, headers) {
 function handleFileRequest(stream, headers) {
     const allowedFiles = ["index.html", "main.css", "main.js"];
     const [path1, path2] = headers[HTTP2_HEADER_PATH].substring(1).split("/");
+    const path1Lower = path1.toLowerCase();
 
     if (path1.length === 0) {
         sendFile(stream, "site/index.html");
@@ -348,9 +348,9 @@ function handleFileRequest(stream, headers) {
     else if (allowedFiles.includes(path1)) {
         sendFile(stream, `site/${path1}`);
     }
-    else if (Object.keys(g_uploadInfos).includes(path1)) {
+    else if (Object.keys(g_uploadInfos).includes(path1Lower)) {
         if (path2) {
-            sendUploadFile(stream, path1, decodeURI(path2));
+            sendUploadFile(stream, path1Lower, decodeURI(path2));
         }
         else {
             sendFileListPage(stream, path1);
