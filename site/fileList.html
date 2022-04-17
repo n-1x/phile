@@ -12,7 +12,7 @@
             <div id="fileList" class="fileList">
                 {FILE_LIST}
             </div>
-            <button onclick="[...document.querySelectorAll('.fileTracker')].forEach(e => e.click())">*</button>
+            <button onclick="[...document.querySelectorAll('.fileTracker')].forEach(e => window.open(e.href))">*</button>
         </div>
     </body>
 </html>
