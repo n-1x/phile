@@ -342,8 +342,6 @@ function handleFileRequest(stream, headers) {
     const allowedFiles = ["index.html", "main.css", "main.js"];
     const [path1, path2] = headers[HTTP2_HEADER_PATH].substring(1).split("/");
 
-    console.log(path1, path2)
-
     if (path1.length === 0) {
         sendFile(stream, "site/index.html");
     }
