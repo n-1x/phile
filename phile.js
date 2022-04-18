@@ -5,7 +5,7 @@ const fs = require("fs");
 
 const c_charset = "abcdefghijklmnopqrstuvwxyz";
 const c_idLength = 6;
-const c_chunkSize = 1024 ** 2 * 128; //128Mb
+const c_chunkSize = 1024 ** 2 * 1; //4mb
 // Calculated as how long it would take to upload a chunk with a
 // network speed of 200kb/s
 const c_maxTimeBetweenData = 1000 * (c_chunkSize / (1024 * 200));
@@ -135,7 +135,7 @@ function setDeleteTimeout(uid, time = 0, reason = "DELETE") {
     g_uploadInfos[uid].deleteTimeout = setTimeout(() => {
         console.log(`${reason} ${uid}`);
         delete g_uploadInfos[uid];
-        fsp.rmdir(`${__dirname}/uploads/${uid}`, {recursive: true});
+        fsp.rm(`${__dirname}/uploads/${uid}`, {recursive: true});
     }, time);
 }
 
@@ -262,7 +262,6 @@ async function writeChunk(chunkInfo) {
             setDeleteTimeout(uploadId, c_expiryTime, "EXPIRE");
         }
 
-        console.log("RESPONDING RECEIVED: ", fileObj.received);
         respondAndEnd(stream, HTTP_STATUS_OK, null, {
             "received": fileObj.received,
         });

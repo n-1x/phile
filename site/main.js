@@ -1,5 +1,5 @@
 const c_fileNameMaxDisplayLength = 24;
-const c_maxStreams = 4;
+const c_maxStreams = 10;
 const g_keyStates = {};
 const g_fileMap = {};
 
