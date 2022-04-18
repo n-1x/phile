@@ -9,10 +9,34 @@
 
     <body>
         <div id="container" class="container">
+            <p id="countdown"></p>
             <div id="fileList" class="fileList">
                 {FILE_LIST}
             </div>
             <button onclick="[...document.querySelectorAll('.fileTracker')].forEach(e => window.open(e.href))">*</button>
         </div>
+        
+        <script type="text/javascript">
+            const createTime = PHILE_CREATE;
+            const uploadDuration = PHILE_UPLOAD_DURATION;
+            const element = document.getElementById("countdown");
+
+            const updateCountdown = () => {
+                const elapsedTime = Date.now() - createTime;
+                let timeRemaining = (uploadDuration - elapsedTime) / 1000;
+    
+                const remainingHours = Math.floor(timeRemaining / 60 / 60).toString().padStart(2, "0");
+                timeRemaining -= remainingHours * 60 * 60;
+    
+                const remainingMinutes = Math.floor(timeRemaining / 60).toString().padStart(2, "0");
+                timeRemaining -= remainingMinutes * 60;
+    
+                const remainingSeconds = Math.floor(timeRemaining).toString().padStart(2, "0");
+                element.innerText = `${remainingHours}:${remainingMinutes}:${remainingSeconds}`;
+            }
+            
+            updateCountdown();
+            setInterval(updateCountdown, 1000);
+        </script>
     </body>
 </html>

@@ -84,7 +84,10 @@ async function sendFileListPage(stream, uid) {
     }).join("\r\n");
 
     const template = await fsp.readFile(`${__dirname}/site/fileList.html`);
-    const response = template.toString().replace("{FILE_LIST}", fileListHTML);
+    const response = template.toString()
+        .replace("{FILE_LIST}", fileListHTML)
+        .replace("PHILE_CREATE", g_uploadInfos[uid].completeTime)
+        .replace("PHILE_UPLOAD_DURATION", c_expiryTime);
 
     respondAndEnd(stream, HTTP_STATUS_OK, response);
 }
@@ -332,7 +335,6 @@ async function handleDataRequest(stream, headers) {
     // write everything in the queue, else do nothing as
     // the currently running promise will write this data
     if (!g_writePromises[fileName]) {
-        console.log("Write promise started for " + fileName);
         g_writePromises[fileName] = writeAllQueue(fileName)
             .catch(e => console.error("Error in write promise: ", e));
     }
