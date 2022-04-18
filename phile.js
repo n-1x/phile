@@ -29,6 +29,8 @@ const {
 const g_writePromises = {};
 const g_writeQueues = {};
 
+const verbose = false;
+
 //generate an ID of random letters in mixed case
 function generateID() {
     let id = "";
@@ -38,6 +40,11 @@ function generateID() {
     }
 
     return id;
+}
+
+function log(stream, message) {
+    const address = stream.session.socket.remoteAddress;
+    console.log(`[${address}] ${message}`);
 }
 
 //keeps generating IDs until a new one is found
@@ -116,12 +123,14 @@ async function sendUploadFile(stream, uid, fileName) {
             "content-disposition": `attachment; filename="${encodeURI(fileName)}"`
         });
         
-        console.log(`SENDING ${uid}/${fileName}`);
+        if (verbose) {
+            log(stream, `SENDING ${uid}/${fileName}`);
+        }
         const readStream = fs.createReadStream(filePath);
         readStream.pipe(stream);
         
         readStream.on("end", () => {
-            console.log(`SENT ${uid}/${fileName}`);
+            log(stream, `SENT ${uid}/${fileName}`);
         });
     }
 }
@@ -149,7 +158,7 @@ async function handleNewUploadRequest(stream, headers) {
         return;
     }
 
-    console.log(`NEW ${uid} [${totalSize}]`);
+    log(stream, `NEW ${uid} [${totalSize}]`);
 
     g_uploadInfos[uid] = {
         files: {},
@@ -222,8 +231,6 @@ function validateDataRequest(stream, headers) {
         valid = false;
     }
     
-    console.log(`DATA REQUEST ${valid ? "VALID" : "INVALID"}`);
-
     if (!valid) {
         return null;
     }
@@ -249,13 +256,13 @@ async function writeChunk(chunkInfo) {
         await fileObj.fd.write(chunkData, 0, chunkData.length, offset);
         
         if (fileObj.received >= fileObj.size) {
-            console.log(`FIN ${fileObj.name}`);
+            log(stream, `RECEIVED ${uploadId}/${fileObj.name}`);
             fileObj.fd.close();
             fileObj.fd = null;
         }
         
         if (uploadComplete) {
-            console.log(`COMPLETE ${uploadId}`);
+            log(stream, `COMPLETE ${uploadId}`);
             uploadObj.complete = true;
             uploadObj.completeTime = Date.now();
             saveSession();
@@ -295,7 +302,10 @@ async function handleDataRequest(stream, headers) {
         contentLength, uploadId, 
         fileName, offset, uploadObj
     } = requestInfo;
-    console.log(`DATA ${uploadId}/${fileName} [${offset} - ${contentLength}]`);
+    
+    if (verbose) {
+        log(stream, `DATA ${uploadId}/${fileName} [${offset} - ${contentLength}]`);
+    }
 
     setDeleteTimeout(uploadId, c_maxTimeBetweenData, "FAIL");
 
@@ -311,7 +321,9 @@ async function handleDataRequest(stream, headers) {
         uploadObj.files[fileName] = fileObj;
 
         const dirPath = `${__dirname}/uploads/${uploadId}`;
-        console.log(`OPEN ${uploadId}/${fileName}`);
+        if (verbose) {
+            log(stream, `OPEN ${uploadId}/${fileName}`);
+        }
         fileObj.fdPromise = fsp.open(`${dirPath}/${fileName}`, "wx");
     }
     
@@ -440,13 +452,14 @@ const server = http2.createSecureServer(options);
 server.on("error", e => console.error(e));
 
 server.on("stream", (stream, headers) => {
-    const address = stream.session.socket.remoteAddress;
     const method = headers[HTTP2_HEADER_METHOD];
 
-    console.log(`[${address}] ${method} ${headers[HTTP2_HEADER_PATH]}`);
+    if (verbose) {
+        log(`${method} ${headers[HTTP2_HEADER_PATH]}`);
+    }
 
     stream.on("error", e => {
-        console.log("Network error: " + e);
+        log(stream, "Network error: " + e);
     });
 
     switch(method) {
@@ -463,7 +476,7 @@ server.on("stream", (stream, headers) => {
             break;
 
         default:
-            console.log("NO HANDLER");
+            log(stream, "NO HANDLER");
             respondAndEnd(stream, HTTP_STATUS_BAD_REQUEST);
     }
 });
