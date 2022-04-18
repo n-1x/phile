@@ -6,9 +6,7 @@ const fs = require("fs");
 const c_charset = "abcdefghijklmnopqrstuvwxyz";
 const c_idLength = 6;
 const c_chunkSize = 1024 ** 2 * 1; //4mb
-// Calculated as how long it would take to upload a chunk with a
-// network speed of 200kb/s
-const c_maxTimeBetweenData = 1000 * (c_chunkSize / (1024 * 200));
+const c_maxTimeBetweenData = 1000 * 30; //30s
 const c_expiryTime = 1000 * 60 * 60 * 24; //24h
 
 const g_uploadInfos = {};
@@ -211,7 +209,7 @@ function validateDataRequest(stream, headers) {
     }
     catch (e) { console.error("Failed to parse file-name header") }
     
-    if (!uploadId || !fileName || !isFinite(offset) || !guid) {
+    if (!uploadId || !uploadObj || !fileName || !isFinite(offset) || !guid) {
         respondAndEnd(stream, HTTP_STATUS_BAD_REQUEST);
         valid = false;
     }
@@ -455,7 +453,7 @@ server.on("stream", (stream, headers) => {
     const method = headers[HTTP2_HEADER_METHOD];
 
     if (verbose) {
-        log(`${method} ${headers[HTTP2_HEADER_PATH]}`);
+        log(stream, `${method} ${headers[HTTP2_HEADER_PATH]}`);
     }
 
     stream.on("error", e => {
