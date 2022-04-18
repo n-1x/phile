@@ -28,9 +28,9 @@ function generateGuid() {
 function cutName(name) {
     if (name.length <= c_fileNameMaxDisplayLength) {
         return name;
-    }
+    }   
 
-    return name.substr(0, c_fileNameMaxDisplayLength - 4 - 1) + ">" + name.substr(-4);
+    return name.substr(0, c_fileNameMaxDisplayLength - 7 - 1) + "..." + name.substr(-7);
 }
 
 function addUniqueFileNames(fileList) {

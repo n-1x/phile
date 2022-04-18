@@ -9,11 +9,11 @@
 
     <body>
         <div id="container" class="container">
-            <p id="countdown"></p>
+            <p id="countdown" class="countdown"></p>
             <div id="fileList" class="fileList">
                 {FILE_LIST}
             </div>
-            <button onclick="[...document.querySelectorAll('.fileTracker')].forEach(e => window.open(e.href))">*</button>
+            <button class="download" onclick="[...document.querySelectorAll('.fileTracker')].forEach(e => window.open(e.href))">*</button>
         </div>
         
         <script type="text/javascript">

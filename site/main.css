@@ -10,31 +10,33 @@ html {
     font-family: monospace;
     font-size: 1.5rem;
     text-align: center;
-    box-sizing: content-box;
 }
 
 body {
     margin: 0;
     color: var(--accent);
+    background-color: black;
     text-align: left;
 }
 
-a {
+a, a:visited {
     text-decoration: none;
-    color: var(--accent);
-}
-
-a:visited {
     color: var(--accent);
 }
 
 button {
     background-color: transparent;
     color: var(--accent);
-    border: 2px solid var(--accent);
+    border: 1px solid var(--accent);
     font-size: 1rem;
     width: 20vw;
     height: 6vh;
+    padding: 0;
+}
+
+button.download {
+    width: 100%;
+    margin-top: auto;
 }
 
 :is(button, .fileTracker):hover {
@@ -42,26 +44,25 @@ button {
 }
 
 .container {
-    width: 100vw;
     height: 100vh;
+    padding: 5vh 0;
     box-sizing: border-box;
-    padding: 2vh;
     display: flex;
     gap: 1vh;
     flex-direction: column;
     align-items: center;
     justify-content: flex-start;
-    background-color: black;
+    margin: 0 auto;
+    width: min(35ch, 90vw);
 }
 
 .fileList {
-    width: 100vw;
-    max-width: 35ch;
+    width: 100%;
     max-height: 80vh;
     overflow: auto;
 }
 
-.fileName {
+p {
     margin: 0;
 }
 
@@ -74,9 +75,8 @@ div.dragStarted {
 }
 
 .fileTracker {
-    box-sizing: border-box;
     min-height: 2ch;
-    border: 1px solid;
+    border: 1px solid var(--accent);
     white-space: nowrap;
     overflow: hidden;
     text-align: left;
@@ -115,4 +115,9 @@ div.dragStarted {
     text-decoration: none;
     font-size: 5rem;
     color: var(--accent);
+}
+
+.countdown {
+    font-size: 2rem;
+    margin-bottom: 5vh;
 }
