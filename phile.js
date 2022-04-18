@@ -476,7 +476,7 @@ recover().then(() => {
 // https redirect server
 const redirectServer = http.createServer((req, res) => {
     res.writeHead(301, {
-        "Location": `https://${req.headers.host}`
+        "Location": `https://${req.headers.host}${req.url}`
     });
     res.end();
 });
