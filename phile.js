@@ -392,7 +392,7 @@ async function recover() {
                 const {owner, completeTime} = session[uid];
 
                 if (owner && completeTime) {
-                    g_uploadInfos[uid] = {owner, completeTime};
+                    g_uploadInfos[uid] = {owner, completeTime, complete: true};
                     
                     const timeDiff = Date.now() - completeTime;
                     const remainingTime = c_expiryTime - timeDiff;
