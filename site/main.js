@@ -92,7 +92,7 @@ async function uploadChunk(blob, startByte, fileIndex) {
 
     file.bytesConfirmed = Math.max(
         file.bytesConfirmed,
-        parseInt(response.headers.get("received"))
+        parseInt(response.headers.get("phile-received"))
     );
 }
 

@@ -237,16 +237,12 @@ function validateDataRequest(stream, headers) {
 }
 
 async function writeChunk(chunkInfo) {
-    const {stream, uploadId, uploadObj, 
+    const {uploadId, uploadObj, 
         fileObj, chunkData, 
         offset} = chunkInfo;
 
-    uploadObj.received += chunkData.length;
-    fileObj.received += chunkData.length;
-
     if (uploadObj.received > uploadObj.totalSize || 
         fileObj.received > fileObj.size) {
-        respondAndEnd(stream, HTTP_STATUS_PAYLOAD_TOO_LARGE);
         setDeleteTimeout(uploadId, 0, "EXCEEDED");
     }
     else {
@@ -254,22 +250,18 @@ async function writeChunk(chunkInfo) {
         await fileObj.fd.write(chunkData, 0, chunkData.length, offset);
         
         if (fileObj.received >= fileObj.size) {
-            log(stream, `RECEIVED ${uploadId}/${fileObj.name}`);
+            console.log(`RECEIVED ${uploadId}/${fileObj.name}`);
             fileObj.fd.close();
             fileObj.fd = null;
         }
         
         if (uploadComplete) {
-            log(stream, `COMPLETE ${uploadId}`);
+            console.log(`COMPLETE ${uploadId}`);
             uploadObj.complete = true;
             uploadObj.completeTime = Date.now();
             saveSession();
             setDeleteTimeout(uploadId, c_expiryTime, "EXPIRE");
         }
-
-        respondAndEnd(stream, HTTP_STATUS_OK, null, {
-            "received": fileObj.received,
-        });
     }
 }
 
@@ -325,10 +317,15 @@ async function handleDataRequest(stream, headers) {
         fileObj.fdPromise = fsp.open(`${dirPath}/${fileName}`, "wx");
     }
     
+    const chunkData = await receiveFileChunk(stream, headers);
+    uploadObj.received += chunkData.length;
+    fileObj.received += chunkData.length;
+
+    respondAndEnd(stream, HTTP_STATUS_OK, null, { "phile-received": fileObj.received });
+    
     // ensure all data request wait for file to be ready for write
     fileObj.fd = await fileObj.fdPromise;
-
-    const chunkData = await receiveFileChunk(stream, headers);
+    
     const chunkInfo = {stream, uploadId, 
         uploadObj, fileObj, chunkData, offset};
 
