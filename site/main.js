@@ -1,5 +1,5 @@
 const c_fileNameMaxDisplayLength = 24;
-const c_maxStreams = 2;
+const c_maxStreams = 16;
 const g_keyStates = {};
 const g_fileMap = {};
 
@@ -36,7 +36,7 @@ function cutName(name) {
 function addUniqueFileNames(fileList) {
     Array.from(fileList).forEach(file => {
         g_fileMap[file.name.toLowerCase()] = file;
-        file.bytesConfirmed = 0;
+        file.bytesSent = 0;
     });
     updateFileNamesList();
 }
@@ -90,10 +90,7 @@ async function uploadChunk(blob, startByte, fileIndex) {
         file.success ||= response.ok;
     }
 
-    file.bytesConfirmed = Math.max(
-        file.bytesConfirmed,
-        parseInt(response.headers.get("phile-received"))
-    );
+    file.bytesSent += blob.size;
 }
 
 function getNextChunk(chunkSize) {
@@ -222,17 +219,17 @@ async function beginUpload() {
 }
 
 function updateProgressBars() {
-    let totalConfirmed = 0;
+    let totalSent = 0;
 
     Object.values(g_fileMap).forEach((file, index) => {
-        const {bytesConfirmed, size} = file;
-        const fileProgress = size === 0 ? 1.0 : (bytesConfirmed / size) * 100;
-        totalConfirmed += bytesConfirmed;
+        const {bytesSent, size} = file;
+        const fileProgress = size === 0 ? 1.0 : (bytesSent / size) * 100;
+        totalSent += bytesSent;
         progressMatrix.children[index].style.background = 
         `linear-gradient(to top, var(--accent) ${fileProgress}%, black ${fileProgress}%)`;
     });
 
-    const totalProgress = totalConfirmed / g_cumulativeSize;
+    const totalProgress = totalSent / g_cumulativeSize;
     document.title = `> ${Math.floor(totalProgress * 100)}%`;
 }
 
