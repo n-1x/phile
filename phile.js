@@ -3,9 +3,9 @@ const http = require("http");
 const fsp = require("fs/promises");
 const fs = require("fs");
 
-const DEBUG_verbose = true;
+const DEBUG_verbose = false;
 // Don't actually save the uploaded data
-const DEBUG_simulatedWrite = true;
+const DEBUG_simulatedWrite = false;
 // Time taken for simulated writes
 const DEBUG_simulatedWriteSpeed = 0;
 
@@ -146,7 +146,6 @@ function setDeleteTimeout(uid, time = 0, reason = "DELETE") {
     clearTimeout(uploadInfo.deleteTimeout);
     uploadInfo.deleteTimeout = setTimeout(() => {
         console.log(`DELETE ${uid}: ${reason}`);
-        console.log(JSON.stringify(uploadInfo, null, 2));
         
         for (const {fd} of Object.values(uploadInfo.files)) {
             if (fd) {
@@ -237,7 +236,7 @@ function validateDataRequest(stream, headers) {
     else {
         valid = true;
     }
-    
+
     return valid ? {contentLength, uploadId, fileName, offset, guid, uploadObj} : null;
 }
 
