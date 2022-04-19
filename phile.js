@@ -3,10 +3,16 @@ const http = require("http");
 const fsp = require("fs/promises");
 const fs = require("fs");
 
+const DEBUG_verbose = true;
+// Don't actually save the uploaded data
+const DEBUG_simulatedWrite = true;
+// Time taken for simulated writes
+const DEBUG_simulatedWriteSpeed = 0;
+
 const c_charset = "abcdefghijklmnopqrstuvwxyz";
 const c_idLength = 6;
-const c_chunkSize = 1024 ** 2 * 1; //4mb
-const c_maxTimeBetweenData = 1000 * 30; //30s
+const c_chunkSize = 1024 * 256; //256kb
+const c_maxTimeBetweenData = 1000 * 2; //30s
 const c_expiryTime = 1000 * 60 * 60 * 24; //24h
 
 const g_uploadInfos = {};
@@ -26,8 +32,6 @@ const {
 
 const g_writePromises = {};
 const g_writeQueues = {};
-
-const verbose = false;
 
 //generate an ID of random letters in mixed case
 function generateID() {
@@ -121,7 +125,7 @@ async function sendUploadFile(stream, uid, fileName) {
             "content-disposition": `attachment; filename="${encodeURI(fileName)}"`
         });
         
-        if (verbose) {
+        if (DEBUG_verbose) {
             log(stream, `SENDING ${uid}/${fileName}`);
         }
         const readStream = fs.createReadStream(filePath);
@@ -134,15 +138,25 @@ async function sendUploadFile(stream, uid, fileName) {
 }
 
 function setDeleteTimeout(uid, time = 0, reason = "DELETE") {
-    if (!g_uploadInfos[uid]) {
+    const uploadInfo = g_uploadInfos[uid];
+    if (!uploadInfo) {
         return;
     }
 
-    clearTimeout(g_uploadInfos[uid].deleteTimeout);
-    g_uploadInfos[uid].deleteTimeout = setTimeout(() => {
-        console.log(`${reason} ${uid}`);
+    clearTimeout(uploadInfo.deleteTimeout);
+    uploadInfo.deleteTimeout = setTimeout(() => {
+        console.log(`DELETE ${uid}: ${reason}`);
+        console.log(JSON.stringify(uploadInfo, null, 2));
+        
+        for (const {fd} of Object.values(uploadInfo.files)) {
+            if (fd) {
+                fd.close();
+            }
+        }
+        
         delete g_uploadInfos[uid];
-        fsp.rm(`${__dirname}/uploads/${uid}`, {recursive: true});
+        fsp.rm(`${__dirname}/uploads/${uid}`, {recursive: true})
+            .catch(e => console.error(`Unable to delete ${uid}. ${e}`));
     }, time);
 }
 
@@ -163,10 +177,11 @@ async function handleNewUploadRequest(stream, headers) {
         owner: guid,
         totalSize,
         received: 0,
+        written: 0,
         complete: false
     };
 
-    setDeleteTimeout(uid, c_maxTimeBetweenData, "FAIL");
+    setDeleteTimeout(uid, c_maxTimeBetweenData, "MAX TIME SINCE NEW");
 
     await fsp.mkdir(`${__dirname}/uploads/${uid}`, {recursive: true});
     respondAndEnd(stream, HTTP_STATUS_CREATED, `${uid}/${c_chunkSize}`);
@@ -202,38 +217,28 @@ function validateDataRequest(stream, headers) {
     const uploadObj = g_uploadInfos[uploadId];
 
     let fileName = "";
-    let valid = true;
+    let valid = false;
     
     try {
         fileName = decodeURIComponent(Buffer.from(headers["file-name"], "base64"));
+        valid = true;
     }
     catch (e) { console.error("Failed to parse file-name header") }
     
-    if (!uploadId || !uploadObj || !fileName || !isFinite(offset) || !guid) {
+    if (!uploadId || !fileName || !isFinite(offset) || !guid) {
         respondAndEnd(stream, HTTP_STATUS_BAD_REQUEST);
-        valid = false;
     }
-    
-    if (!uploadObj) {
+    else if (!uploadObj) {
         send404(stream);
-        valid = false;
     }
-
-    if (guid !== uploadObj.owner) {
+    else if (guid !== uploadObj.owner) {
         respondAndEnd(stream, HTTP_STATUS_NOT_AUTHORIZED);
-        valid = false;
     }
-
-    if (uploadObj.received >= uploadObj.totalSize) {
-        respondAndEnd(stream, HTTP_STATUS_PAYLOAD_TOO_LARGE);
-        valid = false;
+    else {
+        valid = true;
     }
     
-    if (!valid) {
-        return null;
-    }
-
-    return {contentLength, uploadId, fileName, offset, guid, uploadObj}
+    return valid ? {contentLength, uploadId, fileName, offset, guid, uploadObj} : null;
 }
 
 async function writeChunk(chunkInfo) {
@@ -242,20 +247,34 @@ async function writeChunk(chunkInfo) {
         offset} = chunkInfo;
 
     if (uploadObj.received > uploadObj.totalSize || 
-        fileObj.received > fileObj.size) {
+        fileObj.written > fileObj.size) {
         setDeleteTimeout(uploadId, 0, "EXCEEDED");
     }
     else {
-        const uploadComplete = uploadObj.received === uploadObj.totalSize;
-        await fileObj.fd.write(chunkData, 0, chunkData.length, offset);
-        
-        if (fileObj.received >= fileObj.size) {
-            console.log(`RECEIVED ${uploadId}/${fileObj.name}`);
-            fileObj.fd.close();
-            fileObj.fd = null;
+        if (DEBUG_simulatedWrite) {
+            const sleep = ms => new Promise(r => setTimeout(r, ms));
+            await sleep(DEBUG_simulatedWriteSpeed);
+        }
+        else {
+            await fileObj.fd.write(chunkData, 0, chunkData.length, offset);
         }
         
-        if (uploadComplete) {
+        fileObj.written += chunkData.length;
+        uploadObj.written += chunkData.length;
+        
+        if (fileObj.written >= fileObj.size) {
+            if (fileObj.written === fileObj.size) {
+                console.log(`RECEIVED ${uploadId}/${fileObj.name}`);
+                fileObj.fd.close();
+                fileObj.fd = null;
+            }
+            else {
+                console.log(typeof fileObj.written, typeof fileObj.size);
+                setDeleteTimeout(uploadId, 0, `Received too many bytes for file ${fileObj.name} [${fileObj.written}/${fileObj.size}]`);
+            }
+        }
+        
+        if (uploadObj.written === uploadObj.totalSize) {
             console.log(`COMPLETE ${uploadId}`);
             uploadObj.complete = true;
             uploadObj.completeTime = Date.now();
@@ -293,39 +312,43 @@ async function handleDataRequest(stream, headers) {
         fileName, offset, uploadObj
     } = requestInfo;
     
-    if (verbose) {
-        log(stream, `DATA ${uploadId}/${fileName} [${offset} - ${contentLength}]`);
+    if (DEBUG_verbose) {
+        //log(stream, `DATA ${uploadId}/${fileName} O:${offset} L:${contentLength}`);
     }
 
-    setDeleteTimeout(uploadId, c_maxTimeBetweenData, "FAIL");
+    setDeleteTimeout(uploadId, c_maxTimeBetweenData, "MAX DATA INTERVAL");
 
     let fileObj = uploadObj.files[fileName];
     
     if (!fileObj) {
         fileObj = {
-            received: 0,
-            size: headers["file-size"],
+            written: 0,
+            size: parseInt(headers["file-size"]),
             fd: null,
             name: fileName
         };
+        
+        if (DEBUG_verbose) {
+            log(stream, `FILE ${uploadId}/${fileObj.name}[${fileObj.size}]`);
+        }
+
         uploadObj.files[fileName] = fileObj;
 
         const dirPath = `${__dirname}/uploads/${uploadId}`;
-        if (verbose) {
+        if (DEBUG_verbose) {
             log(stream, `OPEN ${uploadId}/${fileName}`);
         }
+
         fileObj.fdPromise = fsp.open(`${dirPath}/${fileName}`, "wx");
     }
     
     const chunkData = await receiveFileChunk(stream, headers);
     uploadObj.received += chunkData.length;
-    fileObj.received += chunkData.length;
 
-    respondAndEnd(stream, HTTP_STATUS_OK, null, { "phile-received": fileObj.received });
-    
-    // ensure all data request wait for file to be ready for write
+    respondAndEnd(stream, HTTP_STATUS_OK, null);
+
+    // ensure all data requests wait for file to be ready for write
     fileObj.fd = await fileObj.fdPromise;
-    
     const chunkInfo = {stream, uploadId, 
         uploadObj, fileObj, chunkData, offset};
 
@@ -449,8 +472,8 @@ server.on("error", e => console.error(e));
 server.on("stream", (stream, headers) => {
     const method = headers[HTTP2_HEADER_METHOD];
 
-    if (verbose) {
-        log(stream, `${method} ${headers[HTTP2_HEADER_PATH]}`);
+    if (DEBUG_verbose) {
+        //log(stream, `${method} ${headers[HTTP2_HEADER_PATH]}`);
     }
 
     stream.on("error", e => {
