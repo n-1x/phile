@@ -12,7 +12,7 @@ const DEBUG_simulatedWriteSpeed = 0;
 const c_charset = "abcdefghijklmnopqrstuvwxyz";
 const c_idLength = 6;
 const c_chunkSize = 1024 * 256; //256kb
-const c_maxTimeBetweenData = 1000 * 2; //30s
+const c_maxTimeBetweenData = 1000 * 8; //30s
 const c_expiryTime = 1000 * 60 * 60 * 24; //24h
 
 const g_uploadInfos = {};
