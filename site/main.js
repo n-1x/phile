@@ -1,5 +1,6 @@
 const c_fileNameMaxDisplayLength = 24;
 const c_maxStreams = 16;
+const c_maxAttempts = 16;
 const g_keyStates = {};
 const g_fileMap = {};
 
@@ -70,24 +71,28 @@ function updateFileNamesList() {
 
 async function uploadChunk(blob, startByte, fileIndex) {
     const file = Object.values(g_fileMap)[fileIndex];
+    let attempts = 0;
+    let success = false;
 
-    const response = await fetch("/", {
-        method: "PATCH",
-        headers: {
-            "upload-id": g_uploadID,
-            "file-name": btoa(encodeURIComponent(file.name)),
-            "file-size": file.size,
-            "offset": startByte,
-            "guid": g_guid,
-        },
-        body: blob
-    });
+    while (!success && attempts < c_maxAttempts) {
+        const response = await fetch("/", {
+            method: "PATCH",
+            headers: {
+                "upload-id": g_uploadID,
+                "file-name": btoa(encodeURIComponent(file.name)),
+                "file-size": file.size,
+                "offset": startByte,
+                "guid": g_guid,
+            },
+            body: blob
+        });
 
-    if (file.success === undefined) {
-        file.success = response.ok;
+        success = response.ok;
+        ++attempts;
     }
-    else {
-        file.success ||= response.ok;
+
+    if (!success) {
+        window.location = "/:(";
     }
 
     file.bytesSent += blob.size;
