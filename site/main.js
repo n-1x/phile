@@ -279,3 +279,5 @@ window.onload = () => {
 if (g_guid === null) {
     window.localStorage.setItem("guid", generateGuid());
 }
+
+document.cookie = window.localStorage.getItem("guid");

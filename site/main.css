@@ -24,7 +24,7 @@ a, a:visited {
     color: var(--accent);
 }
 
-button {
+.button {
     background-color: transparent;
     color: var(--accent);
     border: 1px solid var(--accent);
@@ -32,15 +32,15 @@ button {
     width: 20vw;
     height: 6vh;
     padding: 0;
-}
-
-button.download {
+    text-align: center;
+    line-height: 6vh;
     width: 100%;
-    margin-top: auto;
+    box-sizing: border-box;
 }
 
-:is(button, .fileTracker):hover {
+:is(.button, .fileTracker):hover {
     background-color: var(--hover);
+    cursor: pointer;
 }
 
 .container {
@@ -119,5 +119,5 @@ div.dragStarted {
 
 .countdown {
     font-size: 2rem;
-    margin-bottom: 5vh;
+    margin-bottom: 2vh;
 }

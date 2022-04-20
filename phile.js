@@ -3,7 +3,7 @@ const http = require("http");
 const fsp = require("fs/promises");
 const fs = require("fs");
 
-const DEBUG_verbose = false;
+const DEBUG_verbose = true;
 // Don't actually save the uploaded data
 const DEBUG_simulatedWrite = false;
 // Time taken for simulated writes
@@ -22,12 +22,12 @@ const {
     HTTP2_HEADER_METHOD,
     HTTP2_HEADER_PATH,
     HTTP2_HEADER_CONTENT_LENGTH,
-
     HTTP_STATUS_OK,
     HTTP_STATUS_BAD_REQUEST,
     HTTP_STATUS_NOT_FOUND,
-    HTTP_STATUS_PAYLOAD_TOO_LARGE,
-    HTTP_STATUS_CREATED
+    HTTP_STATUS_CREATED,
+    HTTP_STATUS_TEMPORARY_REDIRECT,
+    HTTP_STATUS_UNAUTHORIZED
 } = http2.constants;
 
 const g_writePromises = {};
@@ -86,17 +86,24 @@ async function send404(stream) {
     respondAndEnd(stream, HTTP_STATUS_NOT_FOUND, data);
 }
 
-async function sendFileListPage(stream, uid) {
+async function sendFileListPage(stream, headers, uid) {
     const fileNames = await fsp.readdir(`${__dirname}/uploads/${uid}`);
     const fileListHTML = fileNames.map(fileName => {
         return `<a href="/${uid}/${encodeURI(fileName)}" class="fileTracker download" download><p class="fileName">${fileName}</p></a>`;
     }).join("\r\n");
 
     const template = await fsp.readFile(`${__dirname}/site/fileList.html`);
-    const response = template.toString()
+    let response = template.toString()
         .replace("{FILE_LIST}", fileListHTML)
         .replace("PHILE_CREATE", g_uploadInfos[uid].completeTime)
         .replace("PHILE_UPLOAD_DURATION", c_expiryTime);
+
+    if (headers.cookie === g_uploadInfos[uid].owner) {
+        response = response.replace("{DELETE_BUTTON}", `<a class="button" href="/d/${uid}">X</a>`);
+    }
+    else {
+        response = response.replace("{DELETE_BUTTON}", "");
+    }
 
     respondAndEnd(stream, HTTP_STATUS_OK, response);
 }
@@ -142,20 +149,23 @@ function setDeleteTimeout(uid, time = 0, reason = "DELETE") {
     if (!uploadInfo) {
         return;
     }
-
+    
     clearTimeout(uploadInfo.deleteTimeout);
-    uploadInfo.deleteTimeout = setTimeout(() => {
+    uploadInfo.deleteTimeout = setTimeout(() => {  
         console.log(`DELETE ${uid}: ${reason}`);
-        
-        for (const {fd} of Object.values(uploadInfo.files)) {
-            if (fd) {
-                fd.close();
+
+        if (uploadInfo.files) {
+            for (const {fd} of Object.values(uploadInfo.files)) {
+                if (fd) {
+                    fd.close();
+                }
             }
         }
         
         delete g_uploadInfos[uid];
         fsp.rm(`${__dirname}/uploads/${uid}`, {recursive: true})
             .catch(e => console.error(`Unable to delete ${uid}. ${e}`));
+        saveSession();
     }, time);
 }
 
@@ -231,7 +241,7 @@ function validateDataRequest(stream, headers) {
         send404(stream);
     }
     else if (guid !== uploadObj.owner) {
-        respondAndEnd(stream, HTTP_STATUS_NOT_AUTHORIZED);
+        respondAndEnd(stream, HTTP_STATUS_UNAUTHORIZED);
     }
     else {
         valid = true;
@@ -379,12 +389,23 @@ function handleFileRequest(stream, headers) {
     else if (allowedFiles.includes(path1)) {
         sendFile(stream, `site/${path1}`);
     }
+    else if (path1 === "d") {
+        const uploadInfo = g_uploadInfos[path2];
+        
+        if (uploadInfo && headers.cookie === uploadInfo.owner) {
+            setDeleteTimeout(path2, 0, "Requested by owner");
+            respondAndEnd(stream, HTTP_STATUS_TEMPORARY_REDIRECT, null, {"Location": "/"});
+        }
+        else {
+            send404(stream);
+        }
+    }
     else if (Object.keys(g_uploadInfos).includes(path1Lower)) {
         if (path2) {
             sendUploadFile(stream, path1Lower, decodeURI(path2));
         }
         else {
-            sendFileListPage(stream, path1);
+            sendFileListPage(stream, headers, path1);
         }
     }
     else {
@@ -472,7 +493,7 @@ server.on("stream", (stream, headers) => {
     const method = headers[HTTP2_HEADER_METHOD];
 
     if (DEBUG_verbose) {
-        //log(stream, `${method} ${headers[HTTP2_HEADER_PATH]}`);
+        log(stream, `${method} ${headers[HTTP2_HEADER_PATH]}`);
     }
 
     stream.on("error", e => {
