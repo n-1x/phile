@@ -3,7 +3,7 @@ const http = require("http");
 const fsp = require("fs/promises");
 const fs = require("fs");
 
-const DEBUG_verbose = false;
+const DEBUG_verbose = true;
 // Don't actually save the uploaded data
 const DEBUG_simulatedWrite = false;
 // Time taken for simulated writes
@@ -229,25 +229,27 @@ function validateDataRequest(stream, headers) {
     const uploadObj = g_uploadInfos[uploadId];
 
     let fileName = "";
-    let valid = false;
+    let valid = true;
     
     try {
         fileName = decodeURIComponent(Buffer.from(headers["file-name"], "base64"));
-        valid = true;
     }
-    catch (e) { console.error("Failed to parse file-name header") }
+    catch (e) { 
+        console.error("Failed to parse file-name header");
+        valid = false;
+    }
     
     if (!uploadId || !fileName || !isFinite(offset) || !guid) {
         respondAndEnd(stream, HTTP_STATUS_BAD_REQUEST);
+        valid = false;
     }
     else if (!uploadObj) {
         send404(stream);
+        valid = false;
     }
     else if (guid !== uploadObj.owner) {
         respondAndEnd(stream, HTTP_STATUS_UNAUTHORIZED);
-    }
-    else {
-        valid = true;
+        valid = false;
     }
 
     return valid ? {contentLength, uploadId, fileName, offset, guid, uploadObj} : null;
