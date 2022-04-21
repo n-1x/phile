@@ -45,7 +45,10 @@ function generateID() {
 }
 
 function log(stream, message) {
-    const address = stream.session.socket.remoteAddress;
+    const address = "NO SOCKET";
+    if (stream.session) {
+        address = stream.session.socket.remoteAddress;
+    }
     console.log(`[${address}] ${message}`);
 }
 
