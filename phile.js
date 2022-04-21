@@ -3,7 +3,7 @@ const http = require("http");
 const fsp = require("fs/promises");
 const fs = require("fs");
 
-const DEBUG_verbose = true;
+const DEBUG_verbose = false;
 // Don't actually save the uploaded data
 const DEBUG_simulatedWrite = false;
 // Time taken for simulated writes
