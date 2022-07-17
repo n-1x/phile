@@ -3,7 +3,7 @@ const http = require("http");
 const fsp = require("fs/promises");
 const fs = require("fs");
 
-const DEBUG_verbose = true;
+const DEBUG_verbose = false;
 // Don't actually save the uploaded data
 const DEBUG_simulatedWrite = false;
 // Time taken for simulated writes
@@ -11,8 +11,7 @@ const DEBUG_simulatedWriteSpeed = 0;
 
 const c_charset = "abcdefghijklmnopqrstuvwxyz";
 const c_idLength = 6;
-const c_chunkSize = 1024 * 256; //256kb
-const c_maxTimeBetweenData = 1000 * 8; //30s
+const c_maxTimeBetweenData = 1000 * 8; //8s
 const c_expiryTime = 1000 * 60 * 60 * 24; //24h
 
 const g_uploadInfos = {};
@@ -147,7 +146,7 @@ async function sendUploadFile(stream, uid, fileName) {
     }
 }
 
-function setDeleteTimeout(uid, time = 0, reason = "DELETE") {
+function setDeleteTimeout(uid, time, reason) {
     const uploadInfo = g_uploadInfos[uid];
     if (!uploadInfo) {
         return;
@@ -173,7 +172,7 @@ function setDeleteTimeout(uid, time = 0, reason = "DELETE") {
 }
 
 async function handleNewUploadRequest(stream, headers) {
-    const uid = generateUniqueID();
+    const uploadID = generateUniqueID();
     const totalSize = parseInt(headers["total-size"]);
     const guid = headers["guid"];
 
@@ -182,9 +181,9 @@ async function handleNewUploadRequest(stream, headers) {
         return;
     }
 
-    log(stream, `NEW ${uid} [${totalSize}]`);
+    log(stream, `NEW ${uploadID} [${totalSize}]`);
 
-    g_uploadInfos[uid] = {
+    g_uploadInfos[uploadID] = {
         files: {},
         owner: guid,
         totalSize,
@@ -193,40 +192,58 @@ async function handleNewUploadRequest(stream, headers) {
         complete: false
     };
 
-    setDeleteTimeout(uid, c_maxTimeBetweenData, "MAX TIME SINCE NEW");
-
-    await fsp.mkdir(`${__dirname}/uploads/${uid}`, {recursive: true});
-    respondAndEnd(stream, HTTP_STATUS_CREATED, `${uid}/${c_chunkSize}`);
+    respondAndEnd(stream, HTTP_STATUS_CREATED, `${uploadID}`);
+    if (!DEBUG_simulatedWrite) {
+        g_uploadInfos.dirCreationPromise = fsp.mkdir(`${__dirname}/uploads/${uploadID}`, {recursive: true});
+    }
+    setDeleteTimeout(uploadID, c_maxTimeBetweenData, "NEW INTERVAL");
 }
 
-function receiveFileChunk(stream, headers) {
-    return new Promise((resolve, reject) => {
-        const contentLength = Math.min(headers[HTTP2_HEADER_CONTENT_LENGTH], c_chunkSize);
-        const bufferSize = isFinite(contentLength) ? contentLength : c_chunkSize;
+function receiveFileInChunks(stream, requestInfo) {
+    const {fileName, uploadID, uploadObj} = requestInfo;
 
-        const data = Buffer.alloc(bufferSize);
-        let bytesReceived = 0;
-    
-        stream.on("error", e => {
-            reject(e);
-        });
-        
+    return new Promise((resolve, reject) => {
         stream.on("data", chunk => {
-            bytesReceived += chunk.copy(data, bytesReceived);
+            const chunkInfo = {stream, uploadID, 
+                uploadObj, fileName, chunk};
+
+            setDeleteTimeout(uploadID, c_maxTimeBetweenData, "DATA INTERVAL");
+        
+            // Add the data to a file specific queue
+            if (!g_writeQueues[fileName]) {
+                g_writeQueues[fileName] = [chunkInfo];
+            }
+            else {
+                g_writeQueues[fileName].push(chunkInfo);
+            }
+
+            // if it isn't already running, start a promise to
+            // write everything in the queue, else do nothing as
+            // the currently running promise will write this data
+            if (!g_writePromises[fileName]) {
+                g_writePromises[fileName] = writeAllQueue(fileName).then(() => {
+                    // Check for upload finish whenever write queue is done
+                    if (uploadObj.written === uploadObj.totalSize) {
+                        console.log(`COMPLETE ${uploadID}`);
+                        uploadObj.complete = true;
+                        uploadObj.completeTime = Date.now();
+                        saveSession();
+                        setDeleteTimeout(uploadID, c_expiryTime, "EXPIRE");
+                    }
+                }).catch(reject);
+            }
         });
         
-        stream.on("end", () => {
-            resolve(data);
-        });
+        stream.on("end", resolve);
+        stream.on("error", reject);
     });
 }
 
 function validateDataRequest(stream, headers) {
-    const contentLength = headers[HTTP2_HEADER_CONTENT_LENGTH];
-    const uploadId = headers["upload-id"];
-    const offset = parseInt(headers["offset"]);
+    const contentLength = parseInt(headers[HTTP2_HEADER_CONTENT_LENGTH]);
+    const uploadID = headers["upload-id"];
     const guid = headers["guid"];
-    const uploadObj = g_uploadInfos[uploadId];
+    const uploadObj = g_uploadInfos[uploadID];
 
     let fileName = "";
     let valid = true;
@@ -235,11 +252,11 @@ function validateDataRequest(stream, headers) {
         fileName = decodeURIComponent(Buffer.from(headers["file-name"], "base64"));
     }
     catch (e) { 
-        console.error("Failed to parse file-name header");
+        log(stream, "Failed to parse file-name header");
         valid = false;
     }
     
-    if (!uploadId || !fileName || !isFinite(offset) || !guid) {
+    if (!valid || !uploadID || !fileName || !guid || !isFinite(contentLength)) {
         respondAndEnd(stream, HTTP_STATUS_BAD_REQUEST);
         valid = false;
     }
@@ -252,17 +269,25 @@ function validateDataRequest(stream, headers) {
         valid = false;
     }
 
-    return valid ? {contentLength, uploadId, fileName, offset, guid, uploadObj} : null;
+    return valid ? {contentLength, uploadID, fileName, guid, uploadObj} : null;
 }
 
 async function writeChunk(chunkInfo) {
-    const {uploadId, uploadObj, 
-        fileObj, chunkData, 
-        offset} = chunkInfo;
+    const {uploadID, uploadObj, fileName, chunk, offset} = chunkInfo;
+    const fileObj = uploadObj.files[fileName];
 
-    if (uploadObj.received > uploadObj.totalSize || 
+    if (uploadObj.dirCreationPromise && !DEBUG_simulatedWrite) {
+        await uploadObj.dirCreationPromise;
+        delete uploadObj.dirCreationPromise;
+    }
+
+    if (!fileObj.fd && !DEBUG_simulatedWrite) {
+        fileObj.fd = await fsp.open(`${__dirname}/uploads/${uploadID}/${fileName}`, "wx");
+    }
+
+    if (uploadObj.received > uploadObj.totalSize ||
         fileObj.written > fileObj.size) {
-        setDeleteTimeout(uploadId, 0, "EXCEEDED");
+        setDeleteTimeout(uploadID, 0, "EXCEEDED");
     }
     else {
         if (DEBUG_simulatedWrite) {
@@ -270,30 +295,21 @@ async function writeChunk(chunkInfo) {
             await sleep(DEBUG_simulatedWriteSpeed);
         }
         else {
-            await fileObj.fd.write(chunkData, 0, chunkData.length, offset);
+            await fileObj.fd.write(chunk, 0, chunk.length, offset);
         }
         
-        fileObj.written += chunkData.length;
-        uploadObj.written += chunkData.length;
+        fileObj.written += chunk.length;
+        uploadObj.written += chunk.length;
         
         if (fileObj.written >= fileObj.size) {
             if (fileObj.written === fileObj.size) {
-                console.log(`RECEIVED ${uploadId}/${fileObj.name}`);
+                log(stream, `RECEIVED ${uploadID}/${fileObj.name}`);
                 fileObj.fd.close();
                 fileObj.fd = null;
             }
             else {
-                console.log(typeof fileObj.written, typeof fileObj.size);
-                setDeleteTimeout(uploadId, 0, `Received too many bytes for file ${fileObj.name} [${fileObj.written}/${fileObj.size}]`);
+                setDeleteTimeout(uploadID, 0, `Received too many bytes for file ${fileObj.name} [${fileObj.written}/${fileObj.size}]`);
             }
-        }
-        
-        if (uploadObj.written === uploadObj.totalSize) {
-            console.log(`COMPLETE ${uploadId}`);
-            uploadObj.complete = true;
-            uploadObj.completeTime = Date.now();
-            saveSession();
-            setDeleteTimeout(uploadId, c_expiryTime, "EXPIRE");
         }
     }
 }
@@ -318,68 +334,35 @@ async function handleDataRequest(stream, headers) {
     const requestInfo = validateDataRequest(stream, headers);
 
     if (!requestInfo) {
+        log(stream, `DATA INVALID ${JSON.stringify(headers)}`);
         return;
     }
 
     const {
-        contentLength, uploadId, 
-        fileName, offset, uploadObj
+        contentLength, uploadID, 
+        fileName, uploadObj
     } = requestInfo;
+
+    const fileObj = {
+        written: 0,
+        size: contentLength,
+        fd: null,
+        name: fileName
+    };
     
     if (DEBUG_verbose) {
-        //log(stream, `DATA ${uploadId}/${fileName} O:${offset} L:${contentLength}`);
+        log(stream, `FILE ${uploadID}/${fileObj.name}[${fileObj.size}]`);
     }
 
-    setDeleteTimeout(uploadId, c_maxTimeBetweenData, "MAX DATA INTERVAL");
-
-    let fileObj = uploadObj.files[fileName];
+    uploadObj.files[fileName] = fileObj;
     
-    if (!fileObj) {
-        fileObj = {
-            written: 0,
-            size: parseInt(headers["file-size"]),
-            fd: null,
-            name: fileName
-        };
-        
-        if (DEBUG_verbose) {
-            log(stream, `FILE ${uploadId}/${fileObj.name}[${fileObj.size}]`);
-        }
-
-        uploadObj.files[fileName] = fileObj;
-
-        const dirPath = `${__dirname}/uploads/${uploadId}`;
-        if (DEBUG_verbose) {
-            log(stream, `OPEN ${uploadId}/${fileName}`);
-        }
-
-        fileObj.fdPromise = fsp.open(`${dirPath}/${fileName}`, "wx");
+    try {
+        await receiveFileInChunks(stream, requestInfo);
+        uploadObj.received += contentLength;
+        respondAndEnd(stream, HTTP_STATUS_OK, null);
     }
-    
-    const chunkData = await receiveFileChunk(stream, headers);
-    uploadObj.received += chunkData.length;
-
-    respondAndEnd(stream, HTTP_STATUS_OK, null);
-
-    // ensure all data requests wait for file to be ready for write
-    fileObj.fd = await fileObj.fdPromise;
-    const chunkInfo = {stream, uploadId, 
-        uploadObj, fileObj, chunkData, offset};
-
-    // Add the data to a file specific queue
-    if (!g_writeQueues[fileName]) {
-        g_writeQueues[fileName] = [chunkInfo];
-    }
-    else {
-        g_writeQueues[fileName].push(chunkInfo);
-    }
-
-    // if it isn't already running, start a promise to
-    // write everything in the queue, else do nothing as
-    // the currently running promise will write this data
-    if (!g_writePromises[fileName]) {
-        g_writePromises[fileName] = writeAllQueue(fileName)
-            .catch(e => console.error("Error in write promise: ", e));
+    catch (e) {
+        setDeleteTimeout(uploadID, 0, `File receipt failed: ${e}`);
     }
 }
 
@@ -501,10 +484,6 @@ server.on("stream", (stream, headers) => {
         log(stream, `${method} ${headers[HTTP2_HEADER_PATH]}`);
     }
 
-    stream.on("error", e => {
-        log(stream, "Network error: " + e);
-    });
-
     switch(method) {
         case "GET":
             handleFileRequest(stream, headers);
@@ -530,7 +509,6 @@ recover().then(() => {
     });
 });
 
-// https redirect server
 const redirectServer = http.createServer((req, res) => {
     res.writeHead(301, {
         "Location": `https://${req.headers.host}${req.url}`

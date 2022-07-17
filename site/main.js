@@ -1,5 +1,4 @@
 const c_fileNameMaxDisplayLength = 24;
-const c_maxStreams = 16;
 const c_maxAttempts = 16;
 const g_keyStates = {};
 const g_fileMap = {};
@@ -13,6 +12,7 @@ let g_cumulativeSize = 0;
 let g_currentFileStartByte = 0;
 let g_currentFileIndex = 0;
 let g_activeStreams = [];
+let g_successCount = 0;
 
 const g_accentColour = [];
 
@@ -69,57 +69,6 @@ function updateFileNamesList() {
     fileList.children[0].scrollIntoView();
 }
 
-async function uploadChunk(blob, startByte, fileIndex) {
-    const file = Object.values(g_fileMap)[fileIndex];
-    let attempts = 0;
-    let success = false;
-
-    while (!success && attempts < c_maxAttempts) {
-        const response = await fetch("/", {
-            method: "PATCH",
-            headers: {
-                "upload-id": g_uploadID,
-                "file-name": btoa(encodeURIComponent(file.name)),
-                "file-size": file.size,
-                "offset": startByte,
-                "guid": g_guid,
-            },
-            body: blob
-        });
-
-        success = response.ok;
-        ++attempts;
-    }
-
-    if (!success) {
-        window.location = "/:(";
-    }
-
-    file.bytesSent += blob.size;
-}
-
-function getNextChunk(chunkSize) {
-    const file = Object.values(g_fileMap)[g_currentFileIndex];
-
-    if (!file) {
-        return null;
-    }
-
-    const start = g_currentFileStartByte;
-    const end = start + chunkSize;
-    const slice = file.slice(start, end);
-    g_currentFileStartByte = end;
-    
-    file.sent = end;
-
-    if (end >= file.size) {
-        ++g_currentFileIndex;
-        g_currentFileStartByte = 0;
-    }
-    
-    return [slice, start];
-}
-
 function lowestSquareAbove(x) {
     let answer = 1;
 
@@ -167,75 +116,61 @@ async function beginUpload() {
 
     Object.values(g_fileMap).forEach(({size}) => g_cumulativeSize += size);
 
-    const info = (await (await fetch("/", 
+    g_uploadID = (await (await fetch("/", 
     {
         method: "POST",
         headers: {
             "guid": g_guid,
             "total-size": g_cumulativeSize
         }
-    })).text()).split("/");
+    })).text());
 
-    g_uploadID = info[0];
-    const chunkSize = parseInt(info[1]);
+    const sendFile = async (file, index) => {
+        let attempts = 0;
 
-    const uploadNextChunk = () => {
-        const fileIndex = g_currentFileIndex;
-        const nextChunk = getNextChunk(chunkSize);
-        
-        if (nextChunk === null) {
-            return null;
+        while (!file.success && attempts < c_maxAttempts) {
+            const response = await fetch(`/${g_uploadID}`, {
+                method: "PATCH",
+                headers: {
+                    "upload-id": g_uploadID,
+                    "file-name": btoa(encodeURIComponent(file.name)),
+                    "guid": g_guid,
+                },
+                body: file
+            });
+
+            file.success = response.ok;
+            ++attempts;
         }
 
-        const [chunk, startByte] = nextChunk;
-        return uploadChunk(chunk, startByte, fileIndex);
-    };
-
-    const streamFunc = async (i) => {
-        let done = false;
-        while (!done) {
-            const p = uploadNextChunk();
-
-            if (p !== null) {
-                await p;
-                updateProgressBars();
-            }
-            else {
-                done = true;
-            }
-            
+        if (!file.success) {
+            throw `${file.name} failed after ${attempts} attempts`;
+        }
+        else {
+            ++g_successCount;
+            progressMatrix.children[index].style.background = "var(--accent)";
+            document.title = `> ${Math.floor(g_successCount / Object.values(g_fileMap).length * 100)}%`;
         }
     };
 
-    for (let i = 0; i < c_maxStreams; ++i) {
-        g_activeStreams.push(streamFunc(i).catch(e => {
-            console.error("Stream error: "+ e);
-        }));
-    }
+    let promises = Object.values(g_fileMap).map((file, index) => sendFile(file, index));
 
-    await Promise.allSettled(g_activeStreams);
+    const results = await Promise.allSettled(promises);
+    const success = !results.some(result => result.status === "rejected");
 
     const link = document.createElement("a");
     link.classList.add("downloadLink");
-    link.innerText = g_uploadID;
-    link.href = `/${g_uploadID}`;
+
+    if (success) {
+        link.innerText = g_uploadID;
+        link.href = `/${g_uploadID}`;
+    }
+    else {
+        link.innerText = ":(";
+        link.href = "/";
+    }
     
     container.replaceChildren(link);
-}
-
-function updateProgressBars() {
-    let totalSent = 0;
-
-    Object.values(g_fileMap).forEach((file, index) => {
-        const {bytesSent, size} = file;
-        const fileProgress = size === 0 ? 1.0 : (bytesSent / size) * 100;
-        totalSent += bytesSent;
-        progressMatrix.children[index].style.background = 
-        `linear-gradient(to top, var(--accent) ${fileProgress}%, black ${fileProgress}%)`;
-    });
-
-    const totalProgress = totalSent / g_cumulativeSize;
-    document.title = `> ${Math.floor(totalProgress * 100)}%`;
 }
 
 function handleFileChange() {
