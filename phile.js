@@ -300,10 +300,10 @@ async function writeChunk(chunkInfo) {
         
         fileObj.written += chunk.length;
         uploadObj.written += chunk.length;
-        
+
         if (fileObj.written >= fileObj.size) {
             if (fileObj.written === fileObj.size) {
-                log(stream, `RECEIVED ${uploadID}/${fileObj.name}`);
+                console.log(`RECEIVED ${uploadID}/${fileObj.name}`);
                 fileObj.fd.close();
                 fileObj.fd = null;
             }
@@ -322,10 +322,10 @@ async function writeChunk(chunkInfo) {
 async function writeAllQueue(fileName) {
     let nextObj = g_writeQueues[fileName].shift();
 
-    while (nextObj) {
-        await writeChunk(nextObj);
-        nextObj = g_writeQueues[fileName].shift();
-    }
+        while (nextObj) {
+            await writeChunk(nextObj);
+            nextObj = g_writeQueues[fileName].shift();
+        }
 
     delete g_writePromises[fileName];
 }
