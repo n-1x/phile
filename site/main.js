@@ -9,9 +9,6 @@ let g_guid = window.localStorage.getItem("guid");
 let g_uploadID = null;
 let g_uploadStarted = false;
 let g_cumulativeSize = 0;
-let g_currentFileStartByte = 0;
-let g_currentFileIndex = 0;
-let g_activeStreams = [];
 let g_successCount = 0;
 
 const g_accentColour = [];
@@ -212,7 +209,8 @@ window.onload = () => {
 }
 
 if (g_guid === null) {
-    window.localStorage.setItem("guid", generateGuid());
+    g_guid = generateGuid();
+    window.localStorage.setItem("guid", g_guid);
 }
 
-document.cookie = window.localStorage.getItem("guid");
+document.cookie = g_guid;
