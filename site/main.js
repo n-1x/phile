@@ -11,8 +11,6 @@ let g_uploadID = null;
 let g_uploadStarted = false;
 let g_cumulativeSize = 0;
 let g_totalBytesSent = 0;
-let g_successCount = 0;
-let g_InfoInterval = null;
 
 function generateGuid() {
     let guid = 0n;
@@ -106,34 +104,17 @@ function updateFileProgress(index, sentBytes, size) {
         `linear-gradient(to top, var(--accent) ${progress}%, black ${progress}%)`;
 }
 
-async function readIntoBuffer(buffer, streamReader) {
-    let bytesRead = 0;
-
-    while (bytesRead < buffer.byteLength) {
-        const view = new Uint8Array(buffer, bytesRead, buffer.byteLength - bytesRead);
-        const {value, done} = await streamReader.read(view);
-        
-        bytesRead += value.byteLength;
-        buffer = value.buffer;
-
-        if (done && bytesRead < buffer.byteLength) {
-            console.error("Failed to fill buffer");
-        }
-    }
-
-    return new Uint8Array(buffer, 0, bytesRead);
-};
-
 async function sendFile(file, index) {
-    const stream = file.stream();
-    const streamReader = stream.getReader({mode: "byob"});
+    const reader = file.stream().getReader();
     let success = true;
     let bytesSent = 0;
     
     while (bytesSent < file.size) {
-        const buffer = new ArrayBuffer(Math.min(file.size - bytesSent, c_maxChunkSize));
-        console.log("Reading into new buffer", buffer, "for file", file.name, "Sent bytes:", bytesSent, "/", file.size);
-        const view  = await readIntoBuffer(buffer, streamReader);
+        const {done, value} = await reader.read();
+
+        if (done && bytesSent < file.length) {
+            throw new Error("File stream ended early");
+        }
         
         const response = await fetch(`/${g_uploadID}`, {
             method: "PATCH",
@@ -144,11 +125,11 @@ async function sendFile(file, index) {
                 "00fileName": btoa(encodeURIComponent(file.name)),
                 "00guid": g_guid,
             },
-            body: view
+            body: value
         });
         
-        bytesSent += view.byteLength;
-        g_totalBytesSent += view.byteLength;
+        bytesSent += value.byteLength;
+        g_totalBytesSent += value.byteLength;
         document.title = `> ${Math.floor(g_totalBytesSent / g_cumulativeSize * 100)}% [${g_totalBytesSent}/${g_cumulativeSize}]`;
         success &&= response.ok;
 
@@ -158,7 +139,6 @@ async function sendFile(file, index) {
     success &&= bytesSent === file.size;
 
     if (success) {
-        ++g_successCount;
         progressMatrix.children[index].style.background = "var(--accent)";
     }
 
@@ -188,8 +168,7 @@ async function beginUpload() {
         }
     })).text());
 
-    let promises = Object.values(g_fileMap).map(sendFile);
-    
+    const promises = Object.values(g_fileMap).map(sendFile);
     const results = await Promise.allSettled(promises);
     const errors = results.filter(result => result.status === "rejected");
     errors.forEach(e => console.error(e.reason));
