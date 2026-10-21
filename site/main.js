@@ -19,7 +19,10 @@ function generateGuid() {
         guid |= BigInt(Math.floor(Math.random() * 256)) << (8n * i);
     }
 
-    return BigInt.asUintN(64, guid).toString(16);
+    const guidString = BigInt.asUintN(64, guid).toString(16);
+
+    console.log("GENERATED GUID " + guidString);
+    return guidString;
 }
 
 function cutName(name) {
@@ -123,7 +126,6 @@ async function sendFile(file, index) {
                 "00fileID": index,
                 "00fileSize": file.size,
                 "00fileName": btoa(encodeURIComponent(file.name)),
-                "00guid": g_guid,
             },
             body: value
         });
@@ -163,7 +165,6 @@ async function beginUpload() {
     {
         method: "POST",
         headers: {
-            "00guid": g_guid,
             "00uploadsize": g_cumulativeSize
         }
     })).text());
@@ -229,6 +230,5 @@ window.onload = () => {
 if (g_guid === null) {
     g_guid = generateGuid();
     window.localStorage.setItem("guid", g_guid);
+    document.cookie = `u=${g_guid}`;
 }
-
-document.cookie = g_guid;

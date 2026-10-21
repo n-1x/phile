@@ -3,7 +3,6 @@ const http = require("http");
 const fsp = require("fs/promises");
 const fs = require("fs");
 
-const DEBUG_verbose = false;
 // Don't actually save the uploaded data
 const DEBUG_simulateWrites = false;
 // Time taken for simulated writes
@@ -11,7 +10,7 @@ const DEBUG_writeTime = 4;
 
 const c_charset = "abcdefghijklmnopqrstuvwxyz";
 const c_idLength = 6;
-const c_maxPatchInterval = 1000 * 30;
+const c_maxPatchInterval = 1000 * 12;
 const c_expiryTime = 1000 * 60 * 60 * 24; //24h
 const g_uploadInfos = {};
 
@@ -40,12 +39,11 @@ function generateID() {
 
 function log(message, stream) {
     let address = "";
-    if (DEBUG_verbose && stream && stream.session) {
-        address = stream.session.socket.remoteAddress;
+    if (stream && stream.session) {
+        address = stream.session.socket.remoteAddress + " - ";
     }
-    console.log(`${address}:${message}`);
+    console.log(`${address}${message}`);
 }
-const vlog = DEBUG_verbose ? log : () => {};
 
 function generateUniqueID() {
     let id;
@@ -78,8 +76,10 @@ async function sendFile(stream, path, headers = {}) {
 
     try {
         fd = await fsp.open(`${__dirname}/${path}`);
+        log(`SEND ${path}`, stream)
     }
     catch (e) {
+        log(`INVALID FILE REQUESTED ${path}`, stream)
         fd = await fsp.open(`${__dirname}/site/404.html`);
         headers[HTTP2_HEADER_STATUS] = HTTP_STATUS_NOT_FOUND;
     }
@@ -101,13 +101,15 @@ async function sendFileListPage(stream, headers, uid) {
         return `<a href="/${uid}/${encodeURI(fileName)}" class="fileTracker download" download><p class="fileName">${fileName}</p></a>`;
     }).join("\r\n");
 
+    log(`VIEW ${uid}`, stream)
+    
     const template = await fsp.readFile(`${__dirname}/site/fileList.html`);
     let response = template.toString()
         .replace("{FILE_LIST}", fileListHTML)
         .replace("PHILE_CREATE", g_uploadInfos[uid].completeTime)
         .replace("PHILE_UPLOAD_DURATION", c_expiryTime);
 
-    if (headers.cookie === g_uploadInfos[uid].owner) {
+    if (headers.cookie === `u=${g_uploadInfos[uid].owner}`) {
         response = response.replace("{DELETE_BUTTON}", `<a class="button" href="/d/${uid}">X</a>`);
     }
     else {
@@ -117,14 +119,10 @@ async function sendFileListPage(stream, headers, uid) {
     respondAndEnd(stream, HTTP_STATUS_OK, response);
 }
 
-async function sendUploadFile(stream, uid, fileName) {
+async function sendUploadedFile(stream, uid, fileName) {
     const filePath = `uploads/${uid}/${fileName}`;
 
-    if (!g_uploadInfos[uid]) {
-        send404(stream);
-        return;
-    }
-
+    log(`DOWNLOAD ${uid}`, stream);
     sendFile(stream, filePath);
 }
 
@@ -136,7 +134,7 @@ function setDeleteTimeout(uid, time, reason) {
     
     clearTimeout(uploadInfo.deleteTimeout);
     uploadInfo.deleteTimeout = setTimeout(() => {  
-        log(`DELETE ${uid}: ${reason}`);
+        log(`DELETE ${uid} - ${reason}`);
 
         if (uploadInfo.files) {
             for (const {fd} of Object.values(uploadInfo.files)) {
@@ -172,7 +170,7 @@ function fileComplete(uploadObj, fileObj) {
 async function handleNewUploadRequest(stream, headers) {
     const uploadID = generateUniqueID();
     const size = parseInt(headers["00uploadsize"]);
-    const guid = headers["00guid"];
+    const guid = headers["cookie"].split("=")[1];
 
     if (!guid || !isFinite(size)) {
         respondAndEnd(stream, HTTP_STATUS_BAD_REQUEST);
@@ -204,11 +202,11 @@ async function handlePatchRequest(stream, headers) {
         requestInfo = validatePatchHeaders(headers);
     }
     catch (e) {
-        log(`Data request validation failed: ${e}`, stream);
+        log(`INVALID PATCH REQUEST: ${e}`, stream);
     }
 
     if (!requestInfo) {
-        log(`DATA INVALID`, stream);
+        log(`PATCH DATA INVALID`, stream);
         respondAndEnd(stream, HTTP_STATUS_BAD_REQUEST);
         return;
     }
@@ -233,15 +231,15 @@ async function handlePatchRequest(stream, headers) {
         uploadObj.files[fileID] = fileObj;
     }
     
-    setDeleteTimeout(uploadObj.id, c_maxPatchInterval, "Patch interval exceeded");
+    setDeleteTimeout(uploadObj.id, c_maxPatchInterval, "PATCH INTERVAL EXCEEDED");
     
     let status = HTTP_STATUS_OK;
     try {
         await receiveFileData(stream, uploadObj, uploadObj.files[fileID]);
     }
     catch (e) {
-        setDeleteTimeout(uploadObj.id, 0, `Chunk receipt failed`);
-        log(`Chunk receipt failed:\n${e.stack}`, stream);
+        setDeleteTimeout(uploadObj.id, 0, `CHUNK RECEIPT FAILED`);
+        log(`CHUNK RECEIPT FAILED:\n${e.stack}`, stream);
         status = HTTP_STATUS_BAD_REQUEST;
     }
 
@@ -251,7 +249,7 @@ async function handlePatchRequest(stream, headers) {
 function validatePatchHeaders(headers) {
     const contentLength = parseInt(headers[HTTP2_HEADER_CONTENT_LENGTH]);
     const uploadID = headers["00uploadid"];
-    const guid = headers["00guid"];
+    const uid = headers["cookie"].split("=")[1];
     const uploadObj = g_uploadInfos[uploadID];
     const fileID = headers["00fileid"];
     const fileSize = parseInt(headers["00filesize"]);
@@ -265,30 +263,28 @@ function validatePatchHeaders(headers) {
         error = new Error("Failed to parse file name header");
     }
     
-    if (!uploadID || !fileName || !guid || 
+    if (!uploadID || !fileName || !uid || 
         !isFinite(contentLength) || !isFinite(fileSize)) {
         error = new Error("Invalid parameter");
     }
     else if (!uploadObj) {
         error = new Error("Requested upload that doesn't exist");
     }
-    else if (guid !== uploadObj.owner) {
+    else if (uid !== uploadObj.owner) {
         error = new Error(
-            `Incorrect owner ${guid} for given upload ID ${uploadID}`);
+            `Incorrect owner ${uid} for given upload ID ${uploadID}`);
     }
 
     if (error) {
         throw error;
     }
 
-    return {contentLength, fileName, guid, uploadObj, fileID, fileSize};
+    return {contentLength, fileName, guid: uid, uploadObj, fileID, fileSize};
 }
 
 async function processFileChunk(uploadObj, fileObj, chunk) {
     uploadObj.received += chunk.length;
     fileObj.received += chunk.length;
-
-
 
     if (fileObj.received > fileObj.size) {
         throw new Error("File size exceeded");
@@ -348,25 +344,27 @@ function handleFileRequest(stream, headers) {
     }
     else if (path1 === "d") {
         const uploadInfo = g_uploadInfos[path2];
-        
-        if (uploadInfo && headers.cookie === uploadInfo.owner) {
-            setDeleteTimeout(path2, 0, "Requested by owner");
+
+        if (uploadInfo && headers.cookie === `u=${uploadInfo.owner}`) {
+            setDeleteTimeout(path2, 0, "MANUAL DELETE BY OWNER");
             respondAndEnd(stream, HTTP_STATUS_TEMPORARY_REDIRECT, 
                 null, {"Location": "/"});
         }
         else {
+            log(`UNAUTHORISED DELETE ${headers.cookie}`, stream)
             send404(stream);
         }
     }
     else if (path1Lower in g_uploadInfos) {
         if (path2) {
-            sendUploadFile(stream, path1Lower, decodeURI(path2));
+            sendUploadedFile(stream, path1Lower, decodeURI(path2));
         }
         else {
             sendFileListPage(stream, headers, path1);
         }
     }
     else {
+        log(`VIEW INVALID ID ${path1Lower}`, stream)
         send404(stream);
     }
 }
@@ -486,7 +484,7 @@ server.on("stream", (stream, headers) => {
 
 recover().then(() => {
     server.listen(options, () => {
-        console.log(`Listening on ${options.port}`);
+        console.log(`LISTEN ${options.port}`);
     });
 });
 
