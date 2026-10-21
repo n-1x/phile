@@ -157,7 +157,7 @@ function fileComplete(uploadObj, fileObj) {
     if (uploadObj.received === uploadObj.size) {
         log(`COMPLETE ${uploadObj.id}`);
         uploadObj.completeTime = Date.now();
-        setDeleteTimeout(uploadObj.id, c_expiryTime);
+        setDeleteTimeout(uploadObj.id, c_expiryTime, "EXPIRED");
         saveSession();
     }
 
@@ -231,6 +231,7 @@ async function handlePatchRequest(stream, headers) {
         uploadObj.files[fileID] = fileObj;
     }
     
+    // this will be refreshed when every chunk is received
     setDeleteTimeout(uploadObj.id, c_maxPatchInterval, "PATCH INTERVAL EXCEEDED");
     
     let status = HTTP_STATUS_OK;
@@ -293,6 +294,8 @@ async function processFileChunk(uploadObj, fileObj, chunk) {
         throw new Error("Upload size exceeded");
     }
     else {
+        setDeleteTimeout(uploadObj.id, c_maxPatchInterval, "PATCH INTERVAL EXCEEDED");
+
         if (!DEBUG_simulateWrites) {
             if (fileObj.received === fileObj.size) {
                 if (fileObj.backpressurePromise) {
@@ -303,7 +306,7 @@ async function processFileChunk(uploadObj, fileObj, chunk) {
                     () => fileComplete(uploadObj, fileObj));
 
                 if (!streamReady) {
-                    console.log("waiting for drain event");
+                    log("DRAIN");
                     fileObj.backpressurePromise = (new Promise(resolve => 
                         fileObj.writeStream.once("drain", resolve))).then(() => fileObj.backpressurePromise = null);
                 }
@@ -371,7 +374,7 @@ function handleFileRequest(stream, headers) {
 
 function handleInfoRequest(stream, headers) {
     const uploadID = headers["00uploadid"];
-    const guid = headers.cookie;
+    const guid = headers.cookie.split("=")[1];
     const uploadObj = g_uploadInfos[uploadID];
     let valid = false;
 
