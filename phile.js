@@ -120,8 +120,8 @@ async function sendFileListPage(stream, headers, uploadId) {
     respondAndEnd(stream, HTTP_STATUS_OK, response);
 }
 
-async function sendUploadedFile(stream, uploadID, fileID) {
-    fileID = Number(fileID);
+async function sendUploadedFile(stream, uploadID, fileIDUnsafe) {
+    const fileID = Number(fileIDUnsafe);
     if (!Number.isSafeInteger(fileID))
     {
         log(`INVALID FILE ID REQUESTED ${uploadID}/${fileID}`);
@@ -160,8 +160,8 @@ function setDeleteTimeout(uid, time, reason) {
     }, time);
 }
 
-function fileComplete(uploadObj, fileObj) {
-    log(`FILE DONE ${uploadObj.id}/${fileObj.id}:${fileObj.name}`);
+function fileComplete(uploadObj, fileID, fileObj) {
+    log(`FILE DONE ${uploadObj.id}/${fileID}`);
 
     if (uploadObj.received === uploadObj.size) {
         log(`COMPLETE ${uploadObj.id}`);
@@ -251,7 +251,7 @@ async function handlePatchRequest(stream, headers) {
     
     let status = HTTP_STATUS_OK;
     try {
-        await receiveFileData(stream, uploadObj, uploadObj.files[fileID]);
+        await receiveFileData(stream, uploadObj, fileID, uploadObj.files[fileID]);
     }
     catch (e) {
         setDeleteTimeout(uploadObj.id, 0, `CHUNK RECEIPT FAILED`);
@@ -289,7 +289,7 @@ function validatePatchHeaders(headers) {
     return {contentLength, uploadObj, fileID, fileObj};
 }
 
-async function processFileChunk(uploadObj, fileObj, chunk) {
+async function processFileChunk(uploadObj, fileID, fileObj, chunk) {
     uploadObj.received += chunk.length;
     fileObj.received += chunk.length;
 
@@ -309,7 +309,7 @@ async function processFileChunk(uploadObj, fileObj, chunk) {
                 }
 
                 const streamReady = fileObj.writeStream.write(chunk, null, 
-                    () => fileComplete(uploadObj, fileObj));
+                    () => fileComplete(uploadObj, fileID, fileObj));
 
                 if (!streamReady) {
                     log("DRAIN");
@@ -332,9 +332,9 @@ async function processFileChunk(uploadObj, fileObj, chunk) {
     }
 }
 
-function receiveFileData(stream, uploadObj, fileObj) {
+function receiveFileData(stream, uploadObj, fileID, fileObj) {
     return new Promise((resolve, reject) => {
-        stream.on("data", chunk => processFileChunk(uploadObj, fileObj, chunk));
+        stream.on("data", chunk => processFileChunk(uploadObj, fileID, fileObj, chunk));
         stream.on("end",  resolve);
         stream.on("error", reject);
     });
