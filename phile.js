@@ -95,22 +95,23 @@ async function send404(stream) {
         { [HTTP2_HEADER_STATUS]: HTTP_STATUS_NOT_FOUND});
 }
 
-async function sendFileListPage(stream, headers, uid) {
-    const fileNames = await fsp.readdir(`${__dirname}/uploads/${uid}`);
-    const fileListHTML = fileNames.map(fileName => {
-        return `<a href="/${uid}/${encodeURI(fileName)}" class="fileTracker download" download><p class="fileName">${fileName}</p></a>`;
+async function sendFileListPage(stream, headers, uploadId) {
+    const {files} = g_uploadInfos[uploadId];    
+
+    const fileListHTML = files.map((fileObj, index) => {
+        return `<a href="/${uploadId}/${index}" class="fileTracker download" download="${fileObj.name}"><p class="fileName">${fileObj.name}</p></a>`;
     }).join("\r\n");
 
-    log(`VIEW ${uid}`, stream)
+    log(`VIEW ${uploadId}`, stream)
     
     const template = await fsp.readFile(`${__dirname}/site/fileList.html`);
     let response = template.toString()
         .replace("{FILE_LIST}", fileListHTML)
-        .replace("PHILE_CREATE", g_uploadInfos[uid].completeTime)
+        .replace("PHILE_CREATE", g_uploadInfos[uploadId].completeTime)
         .replace("PHILE_UPLOAD_DURATION", c_expiryTime);
 
-    if (headers.cookie === `u=${g_uploadInfos[uid].owner}`) {
-        response = response.replace("{DELETE_BUTTON}", `<a class="button" href="/d/${uid}">X</a>`);
+    if (headers.cookie === `u=${g_uploadInfos[uploadId].owner}`) {
+        response = response.replace("{DELETE_BUTTON}", `<a class="button" href="/d/${uploadId}">X</a>`);
     }
     else {
         response = response.replace("{DELETE_BUTTON}", "");
@@ -119,10 +120,18 @@ async function sendFileListPage(stream, headers, uid) {
     respondAndEnd(stream, HTTP_STATUS_OK, response);
 }
 
-async function sendUploadedFile(stream, uid, fileName) {
-    const filePath = `uploads/${uid}/${fileName}`;
+async function sendUploadedFile(stream, uploadID, fileID) {
+    fileID = Number(fileID);
+    if (!Number.isSafeInteger(fileID))
+    {
+        log(`INVALID FILE ID REQUESTED ${uploadID}/${fileID}`);
+        send404(stream);
+        return;
+    }
 
-    log(`DOWNLOAD ${uid}`, stream);
+    const filePath = `uploads/${uploadID}/${fileID}`;
+
+    log(`DOWNLOAD ${uploadID}/${fileID}`, stream);
     sendFile(stream, filePath);
 }
 
@@ -169,19 +178,29 @@ function fileComplete(uploadObj, fileObj) {
 
 async function handleNewUploadRequest(stream, headers) {
     const uploadID = generateUniqueID();
-    const size = parseInt(headers["00uploadsize"]);
+    const size = Number(headers["00uploadsize"]);
     const guid = headers["cookie"].split("=")[1];
 
-    if (!guid || !isFinite(size)) {
+    if (!guid || !Number.isSafeInteger(size)) {
         respondAndEnd(stream, HTTP_STATUS_BAD_REQUEST);
         return;
+    }
+
+    const filesInfo = JSON.parse(headers['00filesinfo']);
+    for (const {name, size} of filesInfo)
+    {
+        if (!Number.isSafeInteger(size) || typeof(name) != "string" || name.length <= 0)
+        {
+            respondAndEnd(stream, HTTP_STATUS_BAD_REQUEST);
+            return;
+        }
     }
 
     log(`NEW ${uploadID} [${size}]`, stream);
 
     g_uploadInfos[uploadID] = {
         id: uploadID,
-        files: {},
+        files: filesInfo,
         owner: guid,
         size,
         received: 0,
@@ -212,23 +231,19 @@ async function handlePatchRequest(stream, headers) {
     }
 
     const {
-        fileName, uploadObj,
-        fileID, fileSize
+        uploadObj,
+        fileID, fileObj
     } = requestInfo;
-    
-    if (!(fileID in uploadObj.files)) {
-        log(`FILE START ${uploadObj.id}/${fileName}`);
-        const fileObj = {
-            id: fileID, received: 0, size: fileSize, name: fileName
-        };
+
+    if (!("received" in fileObj)) {
+        log(`FILE START ${uploadObj.id}/${fileID}`);
+        fileObj.received = 0;
 
         if (!DEBUG_simulateWrites) {
             fileObj.fd = await fsp.open(
-                `${__dirname}/uploads/${uploadObj.id}/${fileName}`, "wx");
+                `${__dirname}/uploads/${uploadObj.id}/${fileID}`, "wx");
             fileObj.writeStream = fileObj.fd.createWriteStream();
         }
-
-        uploadObj.files[fileID] = fileObj;
     }
     
     // this will be refreshed when every chunk is received
@@ -248,39 +263,30 @@ async function handlePatchRequest(stream, headers) {
 }
 
 function validatePatchHeaders(headers) {
-    const contentLength = parseInt(headers[HTTP2_HEADER_CONTENT_LENGTH]);
+    const contentLength = Number(headers[HTTP2_HEADER_CONTENT_LENGTH]);
     const uploadID = headers["00uploadid"];
-    const uid = headers["cookie"].split("=")[1];
+    const guid = headers["cookie"].split("=")[1];
     const uploadObj = g_uploadInfos[uploadID];
     const fileID = headers["00fileid"];
-    const fileSize = parseInt(headers["00filesize"]);
+    const fileObj = uploadObj.files[fileID];
     let error = null;
-    let fileName = "";
-    
-    try {
-        fileName = decodeURIComponent(Buffer.from(headers["00filename"], "base64"));
-    }
-    catch (e) { 
-        error = new Error("Failed to parse file name header");
-    }
-    
-    if (!uploadID || !fileName || !uid || 
-        !isFinite(contentLength) || !isFinite(fileSize)) {
+
+    if (!uploadID || !guid || !Number.isSafeInteger(contentLength)) {
         error = new Error("Invalid parameter");
     }
     else if (!uploadObj) {
         error = new Error("Requested upload that doesn't exist");
     }
-    else if (uid !== uploadObj.owner) {
+    else if (guid !== uploadObj.owner) {
         error = new Error(
-            `Incorrect owner ${uid} for given upload ID ${uploadID}`);
+            `Incorrect owner ${guid} for given upload ID ${uploadID}`);
     }
 
     if (error) {
         throw error;
     }
 
-    return {contentLength, fileName, guid: uid, uploadObj, fileID, fileSize};
+    return {contentLength, uploadObj, fileID, fileObj};
 }
 
 async function processFileChunk(uploadObj, fileObj, chunk) {
@@ -359,15 +365,15 @@ function handleFileRequest(stream, headers) {
         }
     }
     else if (path1Lower in g_uploadInfos) {
-        if (path2) {
-            sendUploadedFile(stream, path1Lower, decodeURI(path2));
+        if (path2 !== undefined) {
+            sendUploadedFile(stream, path1Lower, path2);
         }
         else {
             sendFileListPage(stream, headers, path1);
         }
     }
     else {
-        log(`VIEW INVALID ID ${path1Lower}`, stream)
+        log(`VIEW INVALID UPLOAD ID ${path1Lower}`, stream);
         send404(stream);
     }
 }
@@ -397,9 +403,12 @@ function handleInfoRequest(stream, headers) {
 async function saveSession() {
     const sessionObj = {};
 
-    for (const [uid, {owner, completeTime}] of Object.entries(g_uploadInfos)) {
+    for (const [uid, {owner, completeTime, files}] of Object.entries(g_uploadInfos)) {
         if (completeTime) {
-            sessionObj[uid] = {owner, completeTime};
+            sessionObj[uid] = {owner, completeTime, files: []};
+            for (const {name, size} of files) {
+                sessionObj[uid].files.push({name, size})
+            }
         }
     }
 
@@ -417,10 +426,10 @@ async function recover() {
             const session = JSON.parse(text);
 
             for (const uid in session) {
-                const {owner, completeTime} = session[uid];
+                const {owner, completeTime, files} = session[uid];
 
-                if (owner && completeTime) {
-                    g_uploadInfos[uid] = {owner, completeTime};
+                if (owner && completeTime && files) {
+                    g_uploadInfos[uid] = {owner, completeTime, files};
                     
                     const timeDiff = Date.now() - completeTime;
                     const remainingTime = c_expiryTime - timeDiff;

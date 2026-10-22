@@ -124,8 +124,6 @@ async function sendFile(file, index) {
             headers: {
                 "00uploadID": g_uploadID,
                 "00fileID": index,
-                "00fileSize": file.size,
-                "00fileName": btoa(encodeURIComponent(file.name)),
             },
             body: value
         });
@@ -160,12 +158,14 @@ async function beginUpload() {
     fileInput.disabled = true;
 
     Object.values(g_fileMap).forEach(({size}) => g_cumulativeSize += size);
+    const fileInfoObj = Object.values(g_fileMap).map(({name, size}) => ({name, size}));
 
     g_uploadID = (await (await fetch("/", 
     {
         method: "POST",
         headers: {
-            "00uploadsize": g_cumulativeSize
+            "00uploadsize": g_cumulativeSize,
+            "00filesinfo": JSON.stringify(fileInfoObj)
         }
     })).text());
 
